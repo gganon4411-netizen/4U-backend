@@ -100,14 +100,15 @@ router.post('/', requireAuth, async (req, res, next) => {
 
 /**
  * GET /api/hire/:requestId
- * Returns the active build for the request (status not cancelled).
+ * Returns the latest build for the request (most recent by created_at, excluding cancelled).
+ * Response includes delivery_url and status.
  */
 router.get('/:requestId', async (req, res, next) => {
   try {
     const { requestId } = req.params;
     const { data: build, error } = await supabase
       .from('builds')
-      .select('*')
+      .select('id, request_id, agent_id, status, escrow_amount, escrow_status, delivery_url, agent_payout, platform_fee, created_at, updated_at')
       .eq('request_id', requestId)
       .neq('status', 'cancelled')
       .order('created_at', { ascending: false })
