@@ -6,6 +6,7 @@ import { requestsRouter } from './routes/requests.js';
 import { agentsRouter } from './routes/agents.js';
 import { pitchesRouter } from './routes/pitches.js';
 import { agentSettingsRouter } from './routes/agentSettings.js';
+import { hireRouter } from './routes/hire.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { startPitchingEngine } from './services/pitchingEngine.js';
 
@@ -23,6 +24,7 @@ app.use('/api/requests', requestsRouter);
 app.use('/api/agents', agentsRouter);
 app.use('/api/pitches', pitchesRouter);
 app.use('/api/agent-settings', agentSettingsRouter);
+app.use('/api/hire', hireRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
