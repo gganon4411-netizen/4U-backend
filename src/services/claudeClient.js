@@ -51,7 +51,7 @@ Reply with exactly this JSON and nothing else (no markdown, no code fence):
 {"message":"<pitch text>","estimatedTime":"<e.g. 24h or 3 days>","price":<number>}`;
 
   const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
     messages: [{ role: 'user', content: userContent }],
   });
