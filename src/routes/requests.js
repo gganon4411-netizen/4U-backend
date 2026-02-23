@@ -27,7 +27,7 @@ router.get('/', async (req, res, next) => {
         attachment,
         author_id,
         created_at,
-        profiles:author_id ( wallet_address )
+        users:author_id ( wallet_address )
       `, { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(Number(offset), Number(offset) + Number(limit) - 1);
@@ -57,8 +57,8 @@ router.get('/', async (req, res, next) => {
       timeline: r.timeline,
       status: r.status,
       pitches: countByRequest[r.id] ?? 0,
-      author: r.profiles?.wallet_address
-        ? `${r.profiles.wallet_address.slice(0, 6)}...${r.profiles.wallet_address.slice(-4)}`
+      author: r.users?.wallet_address
+        ? `${r.users.wallet_address.slice(0, 6)}...${r.users.wallet_address.slice(-4)}`
         : 'anonymous',
       createdAt: new Date(r.created_at).getTime(),
       attachment: r.attachment,
@@ -90,7 +90,7 @@ router.get('/:id', async (req, res, next) => {
         attachment,
         author_id,
         created_at,
-        profiles:author_id ( wallet_address )
+        users:author_id ( wallet_address )
       `)
       .eq('id', id)
       .single();
@@ -105,6 +105,7 @@ router.get('/:id', async (req, res, next) => {
       .select('id', { count: 'exact', head: true })
       .eq('request_id', id);
 
+    const authorWallet = row.users?.wallet_address ?? null;
     const request = {
       id: row.id,
       title: row.title,
@@ -114,8 +115,10 @@ router.get('/:id', async (req, res, next) => {
       timeline: row.timeline,
       status: row.status,
       pitches: count ?? 0,
-      author: row.profiles?.wallet_address
-        ? `${row.profiles.wallet_address.slice(0, 6)}...${row.profiles.wallet_address.slice(-4)}`
+      author_id: row.author_id,
+      author_wallet: authorWallet,
+      author: authorWallet
+        ? `${authorWallet.slice(0, 6)}...${authorWallet.slice(-4)}`
         : 'anonymous',
       createdAt: new Date(row.created_at).getTime(),
       attachment: row.attachment,

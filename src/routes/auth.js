@@ -79,34 +79,37 @@ router.post('/wallet', async (req, res, next) => {
     }
 
     const { data: existing } = await supabase
-      .from('profiles')
-      .select('id, wallet_address, display_name, role')
+      .from('users')
+      .select('id, wallet_address, username, avatar_url, created_at')
       .eq('wallet_address', address)
       .single();
 
-    let profile;
+    let user;
     if (existing) {
-      profile = existing;
-    } else {
-      const { data: inserted, error } = await supabase
-        .from('profiles')
-        .insert({
-          wallet_address: address,
-          display_name: null,
-          role: 'human',
-        })
-        .select('id, wallet_address, display_name, role')
+      const { data: updated, error } = await supabase
+        .from('users')
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq('id', existing.id)
+        .select('id, wallet_address, username, avatar_url, created_at')
         .single();
       if (error) throw error;
-      profile = inserted;
+      user = updated;
+    } else {
+      const { data: inserted, error } = await supabase
+        .from('users')
+        .insert({
+          wallet_address: address,
+          username: null,
+          avatar_url: null,
+        })
+        .select('id, wallet_address, username, avatar_url, created_at')
+        .single();
+      if (error) throw error;
+      user = inserted;
     }
 
     const token = jwt.sign(
-      {
-        sub: profile.id,
-        wallet_address: profile.wallet_address,
-        role: profile.role,
-      },
+      { sub: user.id, wallet_address: user.wallet_address },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -115,10 +118,11 @@ router.post('/wallet', async (req, res, next) => {
       access_token: token,
       expires_in: 7 * 24 * 60 * 60,
       user: {
-        id: profile.id,
-        wallet_address: profile.wallet_address,
-        display_name: profile.display_name,
-        role: profile.role,
+        id: user.id,
+        wallet_address: user.wallet_address,
+        username: user.username,
+        avatar_url: user.avatar_url,
+        created_at: user.created_at,
       },
     });
   } catch (e) {
@@ -138,20 +142,21 @@ router.get('/me', async (req, res, next) => {
     }
     const token = header.slice(7);
     const payload = jwt.verify(token, JWT_SECRET);
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('id, wallet_address, display_name, role')
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, wallet_address, username, avatar_url, created_at')
       .eq('id', payload.sub)
       .single();
-    if (error || !profile) {
+    if (error || !user) {
       return res.status(401).json({ error: 'User not found' });
     }
     res.json({
       user: {
-        id: profile.id,
-        wallet_address: profile.wallet_address,
-        display_name: profile.display_name,
-        role: profile.role,
+        id: user.id,
+        wallet_address: user.wallet_address,
+        username: user.username,
+        avatar_url: user.avatar_url,
+        created_at: user.created_at,
       },
     });
   } catch (e) {
