@@ -12,6 +12,7 @@
     "@anthropic-ai/sdk": "^0.32.1",
     "@solana/web3.js": "^1.95.0",
     "@supabase/supabase-js": "^2.45.0",
+    "archiver": "^7.0.1",
     "bs58": "^5.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

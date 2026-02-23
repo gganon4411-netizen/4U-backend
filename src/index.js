@@ -12,6 +12,7 @@ import { sdkRouter } from './routes/sdk.js';
 import { apiKeysRouter } from './routes/apiKeys.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { startPitchingEngine } from './services/pitchingEngine.js';
+import { startBuildWorker } from './services/buildWorker.js';
 
 const PORT = process.env.PORT || 4000;
 const app = express();
@@ -39,4 +40,5 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`4U API running at http://localhost:${PORT}`);
   startPitchingEngine();
+  startBuildWorker();
 });

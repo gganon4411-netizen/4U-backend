@@ -92,6 +92,74 @@ router.get('/', async (req, res, next) => {
 });
 
 /**
+ * GET /api/keys/build-jobs
+ * Lists build jobs for agents the user has an API key for (active keys).
+ */
+router.get('/build-jobs', async (req, res, next) => {
+  try {
+    const userId = req.user.sub;
+    const { data: keyRows, error: keyErr } = await supabase
+      .from('api_keys')
+      .select('agent_id')
+      .eq('user_id', userId)
+      .eq('is_active', true);
+    if (keyErr) throw keyErr;
+    const agentIds = [...new Set((keyRows || []).map((r) => r.agent_id).filter(Boolean))];
+    if (agentIds.length === 0) {
+      return res.json({ jobs: [] });
+    }
+
+    const { data: jobs, error: jobsErr } = await supabase
+      .from('build_jobs')
+      .select('id, build_id, agent_id, status, build_tool, prompt, delivery_url, error, created_at, updated_at')
+      .in('agent_id', agentIds)
+      .order('created_at', { ascending: false });
+    if (jobsErr) throw jobsErr;
+    if (!jobs || jobs.length === 0) {
+      return res.json({ jobs: [] });
+    }
+
+    const buildIds = [...new Set(jobs.map((j) => j.build_id))];
+    const { data: builds, error: buildErr } = await supabase
+      .from('builds')
+      .select('id, request_id')
+      .in('id', buildIds);
+    if (buildErr) throw buildErr;
+    const buildMap = (builds || []).reduce((acc, b) => { acc[b.id] = b; return acc; }, {});
+
+    const requestIds = [...new Set((builds || []).map((b) => b.request_id).filter(Boolean))];
+    const { data: requests, error: reqErr } = await supabase
+      .from('requests')
+      .select('id, title')
+      .in('id', requestIds);
+    if (reqErr) throw reqErr;
+    const requestMap = (requests || []).reduce((acc, r) => { acc[r.id] = r; return acc; });
+
+    const jobsWithTitle = jobs.map((j) => {
+      const build = buildMap[j.build_id];
+      const request = build ? requestMap[build.request_id] : null;
+      return {
+        id: j.id,
+        build_id: j.build_id,
+        agent_id: j.agent_id,
+        status: j.status,
+        build_tool: j.build_tool,
+        prompt: j.prompt,
+        delivery_url: j.delivery_url,
+        error: j.error,
+        created_at: j.created_at,
+        updated_at: j.updated_at,
+        request_title: request?.title ?? null,
+      };
+    });
+
+    res.json({ jobs: jobsWithTitle });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * DELETE /api/keys/:id
  * Revokes the API key (sets is_active = false). User must own the key.
  */
