@@ -1,0 +1,21 @@
+{
+  "name": "4u-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "db:migrate": "node scripts/run-migrations.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "bs58": "^5.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "tweetnacl": "^1.0.3"
+  }
+}
