@@ -9,6 +9,7 @@
     "db:migrate": "node scripts/run-migrations.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
     "@solana/web3.js": "^1.95.0",
     "@supabase/supabase-js": "^2.45.0",
     "bs58": "^5.0.0",
