@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase.js';
 
 const NETLIFY_API = 'https://api.netlify.com/api/v1';
 const NETLIFY_TOKEN = process.env.NETLIFY_ACCESS_TOKEN;
-const NETLIFY_TEAM_ID = process.env.NETLIFY_TEAM_ID;
+const NETLIFY_SITE_ID = process.env.NETLIFY_SITE_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
 /**
@@ -147,47 +147,29 @@ function createZipBuffer(htmlContent) {
 }
 
 /**
- * Create a Netlify site and deploy zip. Returns the live site URL.
+ * Deploy zip to existing Netlify site. Returns the site's ssl_url or url.
  */
-async function deployToNetlify(zipBuffer, siteName) {
+async function deployToNetlify(zipBuffer) {
   if (!NETLIFY_TOKEN) throw new Error('NETLIFY_ACCESS_TOKEN is not set');
+  if (!NETLIFY_SITE_ID) throw new Error('NETLIFY_SITE_ID is not set');
 
-  const createBody = {
-    name: siteName || `4u-${Date.now()}`,
-    created_via: '4u-build-pipeline',
-  };
-  if (NETLIFY_TEAM_ID) createBody.account_slug = NETLIFY_TEAM_ID;
-
-  const createRes = await fetch(`${NETLIFY_API}/sites`, {
+  const deployRes = await fetch(`${NETLIFY_API}/sites/${NETLIFY_SITE_ID}/deploys`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${NETLIFY_TOKEN}`,
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/zip',
     },
-    body: JSON.stringify(createBody),
-  });
-  if (!createRes.ok) {
-    const errBody = await createRes.text();
-    throw new Error(`Netlify create site failed: ${createRes.status} ${errBody}`);
-  }
-  const site = await createRes.json();
-  const siteId = site.id;
-  const liveUrl = site.url || site.ssl_url || `https://${site.subdomain || siteId}.netlify.app`;
-
-  const form = new FormData();
-  form.append('title', `4U build: ${siteName || siteId}`);
-  form.append('zip', new Blob([zipBuffer], { type: 'application/zip' }), 'site.zip');
-
-  const deployRes = await fetch(`${NETLIFY_API}/sites/${siteId}/builds`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${NETLIFY_TOKEN}` },
-    body: form,
+    body: zipBuffer,
   });
   if (!deployRes.ok) {
     const errBody = await deployRes.text();
     throw new Error(`Netlify deploy failed: ${deployRes.status} ${errBody}`);
   }
-
+  const deploy = await deployRes.json();
+  const liveUrl = deploy.ssl_url || deploy.url;
+  if (!liveUrl) {
+    throw new Error('Netlify deploy response missing ssl_url and url');
+  }
   return liveUrl;
 }
 
@@ -219,8 +201,7 @@ export async function runBuildPipeline(job) {
     const zipBuffer = await createZipBuffer(html);
 
     log('Deploying to Netlify');
-    const siteName = `4u-${jobId.slice(0, 8)}`;
-    const deliveryUrl = await deployToNetlify(zipBuffer, siteName);
+    const deliveryUrl = await deployToNetlify(zipBuffer);
 
     log(`Delivering: ${deliveryUrl}`);
     await deliverJob(jobId, buildId, deliveryUrl);
