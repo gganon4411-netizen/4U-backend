@@ -144,6 +144,7 @@ router.post('/', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'description is required (min 10 characters)' });
     }
 
+    console.log('[POST /api/requests] user:', req.user);
     const payload = {
       author_id: req.user.sub,
       title: title.trim(),
@@ -161,7 +162,11 @@ router.post('/', requireAuth, async (req, res, next) => {
       .select('id, title, description, categories, budget, timeline, status, created_at, author_id')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.log('[POST /api/requests] insert error:', error);
+      throw error;
+    }
+    console.log('[POST /api/requests] inserted row:', row);
 
     res.status(201).json({
       id: row.id,
