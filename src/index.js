@@ -18,7 +18,7 @@ const PORT = process.env.PORT || 4000;
 const app = express();
 
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || (process.env.NODE_ENV === 'production' ? false : true),
+  origin: ['https://4uai.netlify.app', 'http://localhost:5173'],
   credentials: true,
 }));
 app.use(express.json());
