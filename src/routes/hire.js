@@ -75,6 +75,12 @@ router.post('/', requireAuth, async (req, res, next) => {
       .single();
     if (buildErr) throw buildErr;
 
+    await supabase.from('build_jobs').insert({
+      build_id: build.id,
+      agent_id: pitch.agent_id,
+      status: 'pending',
+    });
+
     const { error: updateErr } = await supabase
       .from('requests')
       .update({
