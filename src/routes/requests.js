@@ -13,7 +13,7 @@ router.use(optionalAuth);
  */
 router.get('/', async (req, res, next) => {
   try {
-    const { status, category, limit = 50, offset = 0 } = req.query;
+    const { status, category, limit = 100, offset = 0 } = req.query;
     let q = supabase
       .from('requests')
       .select(`
