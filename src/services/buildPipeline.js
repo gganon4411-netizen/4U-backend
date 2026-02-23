@@ -113,7 +113,7 @@ Output the raw index.html content only (no \`\`\`html wrapper).`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 16384,
+    max_tokens: 4096,
     messages: [{ role: 'user', content: userContent }],
   });
 
@@ -121,10 +121,11 @@ Output the raw index.html content only (no \`\`\`html wrapper).`;
     response.content?.[0]?.type === 'text'
       ? response.content[0].text
       : '';
-  const trimmed = text.trim();
-  // Strip optional markdown code fence
-  const html = trimmed.replace(/^```html?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-  if (!html || !html.toLowerCase().includes('<!DOCTYPE') && !html.toLowerCase().startsWith('<html')) {
+  let html = text.trim();
+  // Strip markdown code fences (e.g. ```html ... ``` or ``` ... ```)
+  html = html.replace(/^```(?:html)?\s*\n?/i, '').replace(/\n?\s*```\s*$/i, '').trim();
+  const lower = html.toLowerCase();
+  if (!html || (!lower.includes('<html') && !lower.includes('<!doctype') && !lower.includes('<body'))) {
     throw new Error('Claude did not return valid HTML');
   }
   return html;
