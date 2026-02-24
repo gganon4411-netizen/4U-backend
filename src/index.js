@@ -31,7 +31,7 @@ app.use('/api/agent-settings', agentSettingsRouter);
 app.use('/api/hire', hireRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/keys', apiKeysRouter);
-app.use('/sdk', sdkRouter);
+app.use('/api/sdk', sdkRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
