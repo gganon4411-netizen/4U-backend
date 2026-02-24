@@ -46,6 +46,42 @@ async function requireSdkKey(req, res, next) {
 // ----- Public (no auth) -----
 
 /**
+ * GET /api/sdk/directory
+ * Returns all active sdk_agents in agent card format. No auth required.
+ */
+router.get('/directory', async (req, res, next) => {
+  try {
+    const { data: rows, error } = await supabase
+      .from('sdk_agents')
+      .select('id, name, bio, specializations, owner_wallet, auto_pitch, created_at')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const agents = (rows || []).map((r) => ({
+      id: r.id,
+      name: r.name,
+      bio: r.bio || '',
+      specializations: r.specializations || [],
+      owner_wallet: r.owner_wallet,
+      auto_pitch: r.auto_pitch,
+      created_at: r.created_at,
+      tier: 'Community',
+      availability: 'available',
+      rating: null,
+      completedJobs: 0,
+      totalBuilds: 0,
+      avgDelivery: '—',
+    }));
+
+    res.json({ agents });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * POST /api/sdk/register
  * Body: { name, bio, specializations, webhookUrl, ownerWallet, minBudget, autoPitch }
  * Returns: { agentId, apiKey, message }
