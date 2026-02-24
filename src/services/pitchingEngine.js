@@ -2,6 +2,24 @@ import { supabase } from '../lib/supabase.js';
 import { generatePitch } from './claudeClient.js';
 
 const POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
+const WEBHOOK_TIMEOUT_MS = 5000;
+
+/**
+ * Fire-and-forget POST to a webhook URL. 5s timeout, errors caught silently.
+ */
+function fireWebhook(url, payload) {
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  })
+    .catch(() => {})
+    .finally(() => clearTimeout(timeoutId));
+}
 
 /**
  * Fetch open requests (status = 'Open').
@@ -44,6 +62,33 @@ async function fetchAutoPitchAgents() {
       ...a,
       settings: settingsByAgent[a.id],
     }));
+}
+
+/**
+ * Fetch SDK agents with auto_pitch = true and is_active = true.
+ */
+async function fetchSdkAutoPitchAgents() {
+  const { data, error } = await supabase
+    .from('sdk_agents')
+    .select('id, name, bio, specializations, min_budget, webhook_url')
+    .eq('auto_pitch', true)
+    .eq('is_active', true);
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Check if this SDK agent already pitched on this request (sdk_pitches).
+ */
+async function sdkAgentAlreadyPitched(requestId, sdkAgentId) {
+  const { data, error } = await supabase
+    .from('sdk_pitches')
+    .select('id')
+    .eq('request_id', requestId)
+    .eq('sdk_agent_id', sdkAgentId)
+    .maybeSingle();
+  if (error) throw error;
+  return !!data;
 }
 
 /**
@@ -107,11 +152,12 @@ async function runPitchCycle() {
   }
 
   try {
-    const [requests, agents] = await Promise.all([
+    const [requests, agents, sdkAgents] = await Promise.all([
       fetchOpenRequests(),
       fetchAutoPitchAgents(),
+      fetchSdkAutoPitchAgents(),
     ]);
-    if (requests.length === 0 || agents.length === 0) return;
+    if (requests.length === 0) return;
 
     for (const req of requests) {
       const requestBrief = {
@@ -178,6 +224,98 @@ async function runPitchCycle() {
         console.log(
           `[pitchingEngine] Posted pitch: agent ${agent.name} -> request ${req.title?.slice(0, 40)}`
         );
+      }
+
+      for (const sdkAgent of sdkAgents) {
+        if (!budgetMatch(req.budget, sdkAgent.min_budget)) continue;
+        if (!specializationMatch(sdkAgent.specializations, req.categories)) continue;
+
+        const alreadyPitched = await sdkAgentAlreadyPitched(req.id, sdkAgent.id);
+        if (alreadyPitched) continue;
+
+        const agentProfile = {
+          name: sdkAgent.name,
+          bio: sdkAgent.bio || '',
+          specializations: sdkAgent.specializations || [],
+          tier: 'Community',
+          rating: 0,
+          avgDelivery: '—',
+        };
+
+        let result;
+        try {
+          result = await generatePitch(requestBrief, agentProfile, { pitchAggression: 3 });
+        } catch (err) {
+          console.error(
+            `[pitchingEngine] Claude pitch failed for SDK agent ${sdkAgent.name} request ${req.id}:`,
+            err.message
+          );
+          continue;
+        }
+
+        const { data: mainPitch, error: pitchInsertErr } = await supabase
+          .from('pitches')
+          .insert({
+            request_id: req.id,
+            agent_id: null,
+            agent_name: sdkAgent.name,
+            author_id: null,
+            message: result.message,
+            estimated_time: result.estimatedTime,
+            price: result.price,
+          })
+          .select('id')
+          .single();
+        if (pitchInsertErr) {
+          if (pitchInsertErr.code === '23505') continue;
+          console.error(
+            `[pitchingEngine] Insert pitch failed SDK agent ${sdkAgent.id} request ${req.id}:`,
+            pitchInsertErr.message
+          );
+          continue;
+        }
+
+        const { error: sdkPitchErr } = await supabase.from('sdk_pitches').insert({
+          sdk_agent_id: sdkAgent.id,
+          request_id: req.id,
+          main_pitch_id: mainPitch.id,
+          message: result.message,
+          price: result.price,
+          estimated_time: result.estimatedTime,
+          status: 'submitted',
+        });
+        if (sdkPitchErr) {
+          if (sdkPitchErr.code === '23505') continue;
+          console.error(
+            `[pitchingEngine] Insert sdk_pitches failed SDK agent ${sdkAgent.id} request ${req.id}:`,
+            sdkPitchErr.message
+          );
+          continue;
+        }
+
+        console.log(
+          `[pitchingEngine] Posted SDK pitch: ${sdkAgent.name} -> request ${req.title?.slice(0, 40)}`
+        );
+
+        if (sdkAgent.webhook_url) {
+          fireWebhook(sdkAgent.webhook_url, {
+            event: 'pitch_submitted',
+            request: {
+              id: req.id,
+              title: req.title,
+              description: req.description,
+              categories: req.categories || [],
+              budget: req.budget,
+              timeline: req.timeline,
+            },
+            pitch: {
+              id: mainPitch.id,
+              message: result.message,
+              estimatedTime: result.estimatedTime,
+              price: result.price,
+            },
+          });
+        }
       }
     }
   } catch (err) {
