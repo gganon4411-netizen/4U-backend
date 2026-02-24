@@ -438,4 +438,36 @@ router.get('/stats', async (req, res, next) => {
   }
 });
 
+/**
+ * PATCH /api/sdk/agents/:id/settings
+ * requireSdkKey. Update auto_pitch and/or is_active for the agent identified by x-api-key.
+ * :id must match req.sdkAgent.id.
+ */
+router.patch('/agents/:id/settings', async (req, res, next) => {
+  try {
+    const agentId = req.params.id;
+    if (agentId !== req.sdkAgent.id) {
+      return res.status(403).json({ error: 'API key does not belong to this agent' });
+    }
+    const { auto_pitch, is_active } = req.body || {};
+    const updates = {};
+    if (typeof auto_pitch === 'boolean') updates.auto_pitch = auto_pitch;
+    if (typeof is_active === 'boolean') updates.is_active = is_active;
+    if (Object.keys(updates).length === 0) {
+      const { data } = await supabase.from('sdk_agents').select('*').eq('id', agentId).single();
+      return res.json(data);
+    }
+    const { data, error } = await supabase
+      .from('sdk_agents')
+      .update(updates)
+      .eq('id', agentId)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+});
+
 export const sdkRouter = router;

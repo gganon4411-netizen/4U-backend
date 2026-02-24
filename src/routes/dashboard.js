@@ -176,4 +176,142 @@ router.get('/activity', requireAuth, async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/dashboard/my-agents
+ * requireAuth. Returns SDK agents where owner_wallet matches current user's wallet_address.
+ */
+router.get('/my-agents', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.sub;
+    const { data: user, error: userErr } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('id', userId)
+      .single();
+    if (userErr || !user?.wallet_address) {
+      return res.status(404).json({ error: 'User wallet not found' });
+    }
+
+    const { data: agents, error } = await supabase
+      .from('sdk_agents')
+      .select('id, name, bio, specializations, auto_pitch, is_active, api_key, created_at')
+      .eq('owner_wallet', user.wallet_address)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    if (!agents || agents.length === 0) {
+      return res.json({ agents: [] });
+    }
+
+    const result = [];
+    for (const agent of agents) {
+      const { data: pitches } = await supabase
+        .from('sdk_pitches')
+        .select('id, request_id, status, price, created_at')
+        .eq('sdk_agent_id', agent.id);
+      const pitchesList = pitches || [];
+      const totalPitches = pitchesList.length;
+      const jobsHired = pitchesList.filter((p) => p.status === 'hired').length;
+      const jobsDelivered = pitchesList.filter((p) => p.status === 'delivered').length;
+      const totalEarned = pitchesList
+        .filter((p) => p.status === 'hired' || p.status === 'delivered')
+        .reduce((sum, p) => sum + (Number(p.price) || 0), 0);
+      const activePitches = pitchesList.filter((p) => p.status === 'submitted').length;
+      const winRate =
+        totalPitches === 0 ? 0 : Math.round((jobsHired / totalPitches) * 1000) / 10;
+
+      const recentPitchIds = pitchesList
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .slice(0, 3)
+        .map((p) => ({ ...p }));
+      const requestIds = [...new Set(recentPitchIds.map((p) => p.request_id))];
+      const { data: reqRows } =
+        requestIds.length > 0
+          ? await supabase.from('requests').select('id, title').in('id', requestIds)
+          : { data: [] };
+      const titlesByRequest = Object.fromEntries((reqRows || []).map((r) => [r.id, r.title]));
+      const recentPitches = recentPitchIds.map((p) => ({
+        requestId: p.request_id,
+        requestTitle: titlesByRequest[p.request_id] || '—',
+        status: p.status,
+        price: p.price != null ? Number(p.price) : null,
+        created_at: p.created_at,
+      }));
+
+      const rawKey = agent.api_key || '';
+      const maskedKey =
+        rawKey.length <= 8 ? '••••••••' : `sdk_...${rawKey.slice(-8)}`;
+
+      result.push({
+        id: agent.id,
+        name: agent.name,
+        bio: agent.bio || '',
+        specializations: agent.specializations || [],
+        auto_pitch: agent.auto_pitch,
+        is_active: agent.is_active,
+        api_key: maskedKey,
+        created_at: agent.created_at,
+        totalPitches,
+        jobsHired,
+        jobsDelivered,
+        totalEarned,
+        activePitches,
+        winRate,
+        recentPitches,
+      });
+    }
+
+    res.json({ agents: result });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * PATCH /api/dashboard/my-agents/:id
+ * requireAuth. Update SDK agent auto_pitch or is_active. Agent must belong to current user (owner_wallet).
+ */
+router.patch('/my-agents/:id', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.sub;
+    const agentId = req.params.id;
+    const { auto_pitch, is_active } = req.body || {};
+
+    const { data: user } = await supabase.from('users').select('wallet_address').eq('id', userId).single();
+    if (!user?.wallet_address) {
+      return res.status(404).json({ error: 'User wallet not found' });
+    }
+
+    const { data: agent, error: fetchErr } = await supabase
+      .from('sdk_agents')
+      .select('id, owner_wallet')
+      .eq('id', agentId)
+      .single();
+    if (fetchErr || !agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    if (agent.owner_wallet !== user.wallet_address) {
+      return res.status(403).json({ error: 'Not your agent' });
+    }
+
+    const updates = {};
+    if (typeof auto_pitch === 'boolean') updates.auto_pitch = auto_pitch;
+    if (typeof is_active === 'boolean') updates.is_active = is_active;
+    if (Object.keys(updates).length === 0) {
+      const { data: current } = await supabase.from('sdk_agents').select('*').eq('id', agentId).single();
+      return res.json(current);
+    }
+
+    const { data: updated, error } = await supabase
+      .from('sdk_agents')
+      .update(updates)
+      .eq('id', agentId)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
 export const dashboardRouter = router;
