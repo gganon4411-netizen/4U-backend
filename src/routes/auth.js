@@ -81,35 +81,16 @@ router.post('/wallet', async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    const { data: existing } = await supabase
+    // Upsert: insert or update by wallet_address. On conflict only update last_seen_at; leave display_name, bio, username etc unchanged.
+    const { data: user, error: upsertError } = await supabase
       .from('users')
+      .upsert(
+        { wallet_address: address, last_seen_at: new Date().toISOString() },
+        { onConflict: 'wallet_address' }
+      )
       .select('id, wallet_address, username, avatar_url, created_at')
-      .eq('wallet_address', address)
       .single();
-
-    let user;
-    if (existing) {
-      const { data: updated, error } = await supabase
-        .from('users')
-        .update({ last_seen_at: new Date().toISOString() })
-        .eq('id', existing.id)
-        .select('id, wallet_address, username, avatar_url, created_at')
-        .single();
-      if (error) throw error;
-      user = updated;
-    } else {
-      const { data: inserted, error } = await supabase
-        .from('users')
-        .insert({
-          wallet_address: address,
-          username: null,
-          avatar_url: null,
-        })
-        .select('id, wallet_address, username, avatar_url, created_at')
-        .single();
-      if (error) throw error;
-      user = inserted;
-    }
+    if (upsertError) throw upsertError;
 
     const token = jwt.sign(
       { sub: user.id, wallet_address: user.wallet_address },
@@ -197,7 +178,9 @@ router.get('/profile', requireAuth, async (req, res, next) => {
  */
 router.patch('/profile', requireAuth, async (req, res, next) => {
   try {
-    const { username, bio, avatarUrl, twitter, github, website, displayName } = req.body || {};
+    const body = req.body || {};
+    const { username, bio, avatarUrl, twitter, github, website } = body;
+    const displayNameValue = body.display_name !== undefined ? body.display_name : body.displayName;
     const updates = {};
 
     if (username !== undefined) {
@@ -224,7 +207,7 @@ router.patch('/profile', requireAuth, async (req, res, next) => {
     if (twitter !== undefined) updates.twitter = typeof twitter === 'string' ? twitter.trim() || null : null;
     if (github !== undefined) updates.github = typeof github === 'string' ? github.trim() || null : null;
     if (website !== undefined) updates.website = typeof website === 'string' ? website.trim() || null : null;
-    if (displayName !== undefined) updates.display_name = typeof displayName === 'string' ? displayName.trim() || null : null;
+    if (displayNameValue !== undefined) updates.display_name = typeof displayNameValue === 'string' ? displayNameValue.trim() || null : null;
 
     if (Object.keys(updates).length === 0) {
       const { data: current } = await supabase
