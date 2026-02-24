@@ -5,10 +5,13 @@ import { requireAuth } from '../middleware/auth.js';
 const router = Router();
 
 function mapBuild(row) {
+  const isSdk = row.agent_id == null;
   return {
     id: row.id,
     request_id: row.request_id,
     agent_id: row.agent_id,
+    agent_name: row.agent_name || null,
+    is_sdk_agent: isSdk,
     status: row.status,
     escrow_amount: row.escrow_amount != null ? Number(row.escrow_amount) : null,
     escrow_status: row.escrow_status,
@@ -52,7 +55,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const { data: pitch, error: pitchErr } = await supabase
       .from('pitches')
-      .select('id, request_id, agent_id, price')
+      .select('id, request_id, agent_id, agent_name, price')
       .eq('id', pitchId)
       .eq('request_id', requestId)
       .single();
@@ -61,6 +64,59 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const escrowAmount = pitch.price != null ? Number(pitch.price) : 0;
+    const isSdkPitch = pitch.agent_id == null;
+
+    let sdkPitchRow = null;
+    if (isSdkPitch) {
+      const { data: sdkPitch, error: sdkErr } = await supabase
+        .from('sdk_pitches')
+        .select('id, sdk_agent_id')
+        .eq('main_pitch_id', pitchId)
+        .maybeSingle();
+      if (sdkErr || !sdkPitch) {
+        return res.status(400).json({ error: 'SDK pitch record not found' });
+      }
+      sdkPitchRow = sdkPitch;
+    }
+
+    if (isSdkPitch && sdkPitchRow) {
+      const { data: build, error: buildErr } = await supabase
+        .from('builds')
+        .insert({
+          request_id: requestId,
+          agent_id: null,
+          agent_name: pitch.agent_name || null,
+          status: 'hired',
+          escrow_amount: escrowAmount,
+          escrow_status: 'locked',
+        })
+        .select()
+        .single();
+      if (buildErr) throw buildErr;
+
+      await supabase
+        .from('sdk_pitches')
+        .update({ status: 'hired' })
+        .eq('main_pitch_id', pitchId);
+
+      const { data: agentRow } = await supabase.from('sdk_agents').select('total_wins').eq('id', sdkPitchRow.sdk_agent_id).single();
+      if (agentRow != null) {
+        await supabase.from('sdk_agents').update({ total_wins: (agentRow.total_wins || 0) + 1 }).eq('id', sdkPitchRow.sdk_agent_id);
+      }
+
+      const { error: updateErr } = await supabase
+        .from('requests')
+        .update({
+          status: 'In Progress',
+          hired_agent_id: null,
+          escrow_status: 'locked',
+          escrow_amount: escrowAmount,
+        })
+        .eq('id', requestId);
+      if (updateErr) throw updateErr;
+
+      return res.status(201).json(mapBuild(build));
+    }
 
     const { data: build, error: buildErr } = await supabase
       .from('builds')
@@ -108,7 +164,7 @@ router.get('/:requestId', async (req, res, next) => {
     const { requestId } = req.params;
     const { data: build, error } = await supabase
       .from('builds')
-      .select('id, request_id, agent_id, status, escrow_amount, escrow_status, delivery_url, agent_payout, platform_fee, created_at, updated_at')
+      .select('id, request_id, agent_id, agent_name, status, escrow_amount, escrow_status, delivery_url, agent_payout, platform_fee, created_at, updated_at')
       .eq('request_id', requestId)
       .neq('status', 'cancelled')
       .order('created_at', { ascending: false })
