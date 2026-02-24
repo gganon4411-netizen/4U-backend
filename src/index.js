@@ -10,6 +10,7 @@ import { hireRouter } from './routes/hire.js';
 import { usersRouter } from './routes/users.js';
 import { sdkRouter } from './routes/sdk.js';
 import { apiKeysRouter } from './routes/apiKeys.js';
+import { dashboardRouter } from './routes/dashboard.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { startPitchingEngine } from './services/pitchingEngine.js';
 import { startBuildWorker } from './services/buildWorker.js';
@@ -32,6 +33,7 @@ app.use('/api/hire', hireRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/keys', apiKeysRouter);
 app.use('/api/sdk', sdkRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
