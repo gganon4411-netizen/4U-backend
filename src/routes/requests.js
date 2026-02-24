@@ -48,7 +48,7 @@ router.get('/', async (req, res, next) => {
       return acc;
     }, {});
 
-    const requests = (rows || []).map((r) => ({
+    const data = (rows || []).map((r) => ({
       id: r.id,
       title: r.title,
       description: r.description,
@@ -64,7 +64,7 @@ router.get('/', async (req, res, next) => {
       attachment: r.attachment,
     }));
 
-    res.json({ requests, total: count ?? requests.length });
+    res.json({ requests: data, total: data.length });
   } catch (e) {
     next(e);
   }
