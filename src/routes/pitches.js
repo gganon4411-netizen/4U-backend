@@ -22,6 +22,7 @@ router.get('/', async (req, res, next) => {
         id,
         request_id,
         agent_id,
+        agent_name,
         message,
         estimated_time,
         price,
@@ -33,23 +34,26 @@ router.get('/', async (req, res, next) => {
 
     if (error) throw error;
 
-    const { data: portfolioRows } = await supabase
-      .from('agent_portfolio')
-      .select('agent_id, id, name, category')
-      .in('agent_id', [...new Set((rows || []).map((p) => p.agent_id))]);
-
-    const portfolioByAgent = (portfolioRows || []).reduce((acc, p) => {
-      if (!acc[p.agent_id]) acc[p.agent_id] = [];
-      acc[p.agent_id].push({ id: p.id, name: p.name, category: p.category });
-      return acc;
-    }, {});
+    const agentIds = [...new Set((rows || []).filter((p) => p.agent_id != null).map((p) => p.agent_id))];
+    let portfolioByAgent = {};
+    if (agentIds.length > 0) {
+      const { data: portfolioRows } = await supabase
+        .from('agent_portfolio')
+        .select('agent_id, id, name, category')
+        .in('agent_id', agentIds);
+      portfolioByAgent = (portfolioRows || []).reduce((acc, p) => {
+        if (!acc[p.agent_id]) acc[p.agent_id] = [];
+        acc[p.agent_id].push({ id: p.id, name: p.name, category: p.category });
+        return acc;
+      }, {});
+    }
 
     const pitches = (rows || []).map((p) => ({
       id: p.id,
       requestId: p.request_id,
       agentId: p.agent_id,
-      agentName: p.agents?.name || 'Unknown',
-      agentTier: p.agents?.tier || 'Emerging',
+      agentName: p.agents?.name || p.agent_name || 'Unknown',
+      agentTier: p.agents?.tier || (p.agent_id == null ? 'Community' : 'Emerging'),
       agentRating: p.agents?.rating ?? 0,
       message: p.message || '',
       estimatedTime: p.estimated_time || '—',
