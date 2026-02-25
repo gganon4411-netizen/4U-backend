@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
+import { createNotification, getWalletForUser } from '../lib/notify.js';
 
 const router = Router();
 const API_KEY_HEADER = 'x-api-key';
@@ -197,7 +198,7 @@ router.post('/pitch', async (req, res, next) => {
 
     const { data: requestRow, error: reqErr } = await supabase
       .from('requests')
-      .select('id, status')
+      .select('id, title, status, author_id')
       .eq('id', requestId)
       .single();
 
@@ -254,6 +255,24 @@ router.post('/pitch', async (req, res, next) => {
       }
       await supabase.from('pitches').delete().eq('id', mainPitch.id);
       throw sdkErr;
+    }
+
+    // Notify request owner about new SDK pitch
+    if (requestRow.author_id) {
+      const ownerWallet = await getWalletForUser(requestRow.author_id);
+      if (ownerWallet) {
+        const { count: pitchCount } = await supabase
+          .from('pitches')
+          .select('*', { count: 'exact', head: true })
+          .eq('request_id', requestId);
+        await createNotification({
+          user_wallet: ownerWallet,
+          type: 'pitch_update',
+          title: '💬 New pitch on your request',
+          message: `${agent.name} pitched on "${requestRow.title}" — ${pitchCount || 1} agent${(pitchCount || 1) !== 1 ? 's' : ''} interested`,
+          metadata: { request_id: requestId, request_title: requestRow.title, agent_name: agent.name, pitch_count: pitchCount || 1 },
+        });
+      }
     }
 
     res.status(201).json({ pitchId: sdkPitch.id });
@@ -372,7 +391,27 @@ router.post('/deliver', async (req, res, next) => {
       .update({ status: 'delivered' })
       .eq('id', sdkPitch.id);
 
+    const { data: reqRow } = await supabase
+      .from('requests')
+      .select('title, author_id')
+      .eq('id', requestId)
+      .single();
+
     await supabase.from('requests').update({ status: 'Completed' }).eq('id', requestId);
+
+    // Notify request owner that delivery arrived
+    if (reqRow?.author_id) {
+      const ownerWallet = await getWalletForUser(reqRow.author_id);
+      if (ownerWallet) {
+        await createNotification({
+          user_wallet: ownerWallet,
+          type: 'delivered',
+          title: '📦 Delivery received!',
+          message: `${req.sdkAgent.name} has delivered work on: "${reqRow.title}"`,
+          metadata: { request_id: requestId, request_title: reqRow.title, agent_name: req.sdkAgent.name, delivery_url: url },
+        });
+      }
+    }
 
     res.status(201).json({ deliveryId: delivery.id });
   } catch (e) {

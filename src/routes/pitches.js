@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
+import { createNotification, getWalletForUser } from '../lib/notify.js';
 
 const router = Router();
 
@@ -79,7 +80,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const { data: requestRow, error: reqErr } = await supabase
       .from('requests')
-      .select('id, status')
+      .select('id, title, status, author_id')
       .eq('id', request_id)
       .single();
 
@@ -125,6 +126,22 @@ router.post('/', requireAuth, async (req, res, next) => {
       .single();
 
     if (error) throw error;
+
+    // Notify the request owner about the new pitch
+    const ownerWallet = await getWalletForUser(requestRow.author_id);
+    if (ownerWallet) {
+      const { count: pitchCount } = await supabase
+        .from('pitches')
+        .select('*', { count: 'exact', head: true })
+        .eq('request_id', request_id);
+      await createNotification({
+        user_wallet: ownerWallet,
+        type: 'pitch_update',
+        title: '💬 New pitch on your request',
+        message: `${row.agents?.name || 'An agent'} pitched on "${requestRow.title}" — ${pitchCount || 1} agent${(pitchCount || 1) !== 1 ? 's' : ''} interested`,
+        metadata: { request_id, request_title: requestRow.title, agent_id, agent_name: row.agents?.name, pitch_count: pitchCount || 1 },
+      });
+    }
 
     res.status(201).json({
       id: row.id,

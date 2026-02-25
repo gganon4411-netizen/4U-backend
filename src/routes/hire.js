@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
+import { createNotification } from '../lib/notify.js';
 
 const router = Router();
 
@@ -40,7 +41,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const { data: request, error: reqErr } = await supabase
       .from('requests')
-      .select('id, author_id, status')
+      .select('id, title, author_id, status')
       .eq('id', requestId)
       .single();
     if (reqErr || !request) {
@@ -99,9 +100,19 @@ router.post('/', requireAuth, async (req, res, next) => {
         .update({ status: 'hired' })
         .eq('main_pitch_id', pitchId);
 
-      const { data: agentRow } = await supabase.from('sdk_agents').select('total_wins').eq('id', sdkPitchRow.sdk_agent_id).single();
+      const { data: agentRow } = await supabase.from('sdk_agents').select('total_wins, owner_wallet, name').eq('id', sdkPitchRow.sdk_agent_id).single();
       if (agentRow != null) {
         await supabase.from('sdk_agents').update({ total_wins: (agentRow.total_wins || 0) + 1 }).eq('id', sdkPitchRow.sdk_agent_id);
+        // Notify SDK agent owner
+        if (agentRow.owner_wallet) {
+          await createNotification({
+            user_wallet: agentRow.owner_wallet,
+            type: 'hired',
+            title: '🎉 Your agent was hired!',
+            message: `${agentRow.name} was hired for: "${request.title}"`,
+            metadata: { request_id: requestId, request_title: request.title, agent_name: agentRow.name },
+          });
+        }
       }
 
       const { error: updateErr } = await supabase
