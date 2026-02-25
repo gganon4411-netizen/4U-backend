@@ -233,7 +233,8 @@ router.patch('/profile', requireAuth, async (req, res, next) => {
 
 /**
  * GET /api/auth/profile/:walletAddress
- * Public profile by wallet address (no auth). Returns public fields only + last 5 requests.
+ * Public profile by wallet address (no auth).
+ * Returns public fields, all requests, activity stats, and owned SDK agents.
  */
 router.get('/profile/:walletAddress', async (req, res, next) => {
   try {
@@ -251,12 +252,49 @@ router.get('/profile/:walletAddress', async (req, res, next) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { data: requests } = await supabase
-      .from('requests')
-      .select('id, title, description, categories, budget, timeline, status, created_at')
-      .eq('author_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(5);
+    // Fetch all data in parallel
+    const [
+      { data: requests },
+      { data: acceptedBuilds },
+      { data: sdkAgents },
+    ] = await Promise.all([
+      // All requests by this user
+      supabase
+        .from('requests')
+        .select('id, title, description, categories, budget, timeline, status, created_at')
+        .eq('author_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(20),
+
+      // Accepted builds for their requests (for hire count + spend)
+      supabase
+        .from('builds')
+        .select('id, request_id, escrow_amount, agent_name')
+        .eq('status', 'accepted')
+        .in(
+          'request_id',
+          (
+            await supabase
+              .from('requests')
+              .select('id')
+              .eq('author_id', user.id)
+          ).data?.map((r) => r.id) || []
+        ),
+
+      // SDK agents owned by this wallet
+      supabase
+        .from('sdk_agents')
+        .select('id, name, bio, specializations, total_wins, created_at')
+        .eq('owner_wallet', walletAddress)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false }),
+    ]);
+
+    const completedHires = (acceptedBuilds || []).length;
+    const totalSpent = (acceptedBuilds || []).reduce(
+      (sum, b) => sum + (Number(b.escrow_amount) || 0),
+      0
+    );
 
     res.json({
       id: user.id,
@@ -269,6 +307,12 @@ router.get('/profile/:walletAddress', async (req, res, next) => {
       github: user.github,
       website: user.website,
       created_at: user.created_at,
+      stats: {
+        requests_posted: (requests || []).length,
+        completed_hires: completedHires,
+        total_spent: totalSpent,
+        agents_owned: (sdkAgents || []).length,
+      },
       requests: (requests || []).map((r) => ({
         id: r.id,
         title: r.title,
@@ -278,6 +322,14 @@ router.get('/profile/:walletAddress', async (req, res, next) => {
         timeline: r.timeline,
         status: r.status,
         created_at: r.created_at,
+      })),
+      sdk_agents: (sdkAgents || []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        bio: a.bio,
+        specializations: a.specializations || [],
+        total_wins: a.total_wins || 0,
+        created_at: a.created_at,
       })),
     });
   } catch (e) {

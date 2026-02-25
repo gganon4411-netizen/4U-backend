@@ -60,6 +60,7 @@ router.get('/', async (req, res, next) => {
       author: r.users?.wallet_address
         ? `${r.users.wallet_address.slice(0, 6)}...${r.users.wallet_address.slice(-4)}`
         : 'anonymous',
+      author_wallet: r.users?.wallet_address ?? null,
       createdAt: new Date(r.created_at).getTime(),
       attachment: r.attachment,
     }));
