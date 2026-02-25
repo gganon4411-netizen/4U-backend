@@ -12,6 +12,8 @@ import { sdkRouter } from './routes/sdk.js';
 import { apiKeysRouter } from './routes/apiKeys.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { notificationsRouter } from './routes/notifications.js';
+import { searchRouter } from './routes/search.js';
+import { followsRouter } from './routes/follows.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { startPitchingEngine } from './services/pitchingEngine.js';
 import { startBuildWorker } from './services/buildWorker.js';
@@ -36,6 +38,8 @@ app.use('/api/keys', apiKeysRouter);
 app.use('/api/sdk', sdkRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/search', searchRouter);
+app.use('/api/follows', followsRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
