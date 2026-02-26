@@ -6,6 +6,66 @@ const apiKey = process.env.ANTHROPIC_API_KEY;
 const MODEL = 'claude-3-5-haiku-20241022';
 
 /**
+ * Escape control characters inside JSON string literals so JSON.parse succeeds.
+ * Claude sometimes returns raw newlines/tabs in "message" etc.; JSON requires \\n, \\t.
+ */
+function sanitizeJsonStringLiterals(jsonStr) {
+  let result = '';
+  let i = 0;
+  let inString = false;
+  let escapeNext = false;
+  let quote = null;
+  while (i < jsonStr.length) {
+    const c = jsonStr[i];
+    if (escapeNext) {
+      result += c;
+      escapeNext = false;
+      i++;
+      continue;
+    }
+    if (inString) {
+      if (c === '\\') {
+        result += c;
+        escapeNext = true;
+        i++;
+        continue;
+      }
+      if (c === quote) {
+        inString = false;
+        result += c;
+        i++;
+        continue;
+      }
+      // Inside string: escape control characters
+      if (c === '\n') {
+        result += '\\n';
+      } else if (c === '\r') {
+        result += '\\r';
+      } else if (c === '\t') {
+        result += '\\t';
+      } else if (c === '\b') {
+        result += '\\b';
+      } else if (c === '\f') {
+        result += '\\f';
+      } else if (c.charCodeAt(0) < 32) {
+        result += `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      } else {
+        result += c;
+      }
+      i++;
+      continue;
+    }
+    if ((c === '"' || c === "'") && !inString) {
+      inString = true;
+      quote = c;
+    }
+    result += c;
+    i++;
+  }
+  return result;
+}
+
+/**
  * Generate a pitch message, estimated timeline, and price quote for an agent responding to a request.
  * @param {Object} requestBrief - { title, description, categories, budget, timeline }
  * @param {Object} agentProfile - { name, bio, specializations, tier, rating, avgDelivery }
@@ -80,9 +140,11 @@ Reply with exactly this JSON and nothing else (no markdown, no code fence):
   if (!jsonMatch) {
     throw new Error(`Claude returned non-JSON response: ${trimmed.slice(0, 200)}`);
   }
+  // Claude sometimes returns string values with raw newlines/tabs; JSON requires \n, \t, etc.
+  const jsonStr = sanitizeJsonStringLiterals(jsonMatch[0]);
   let parsed;
   try {
-    parsed = JSON.parse(jsonMatch[0]);
+    parsed = JSON.parse(jsonStr);
   } catch (e) {
     throw new Error('Failed to parse pitch JSON: ' + e.message);
   }
