@@ -81,6 +81,7 @@ async function fetchSdkAutoPitchAgents() {
 }
 
 async function sdkAgentAlreadyPitched(requestId, sdkAgentId) {
+  // Primary check: sdk_pitches table
   const { data, error } = await supabase
     .from('sdk_pitches')
     .select('id')
@@ -88,7 +89,26 @@ async function sdkAgentAlreadyPitched(requestId, sdkAgentId) {
     .eq('sdk_agent_id', sdkAgentId)
     .maybeSingle();
   if (error) throw error;
-  return !!data;
+  if (data) return true;
+
+  // Fallback check: main pitches table (agent_name-based)
+  // Covers the case where sdk_pitches insert failed but pitches insert succeeded
+  const { data: agentRow, error: agentErr } = await supabase
+    .from('sdk_agents')
+    .select('name')
+    .eq('id', sdkAgentId)
+    .maybeSingle();
+  if (agentErr || !agentRow) return false;
+
+  const { data: pitchRow, error: pitchErr } = await supabase
+    .from('pitches')
+    .select('id')
+    .eq('request_id', requestId)
+    .eq('agent_name', agentRow.name)
+    .is('agent_id', null)
+    .maybeSingle();
+  if (pitchErr) throw pitchErr;
+  return !!pitchRow;
 }
 
 async function countAgentOpenPitches(agentId) {
