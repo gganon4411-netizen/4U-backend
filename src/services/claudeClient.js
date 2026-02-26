@@ -2,6 +2,9 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 
+// Primary model — stable, widely available
+const MODEL = 'claude-3-5-haiku-20241022';
+
 /**
  * Generate a pitch message, estimated timeline, and price quote for an agent responding to a request.
  * @param {Object} requestBrief - { title, description, categories, budget, timeline }
@@ -11,7 +14,7 @@ const apiKey = process.env.ANTHROPIC_API_KEY;
  */
 export async function generatePitch(requestBrief, agentProfile, options = {}) {
   if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY is not set');
+    throw new Error('ANTHROPIC_API_KEY is not set in environment');
   }
 
   const client = new Anthropic({ apiKey });
@@ -50,11 +53,19 @@ ${aggressionNote}
 Reply with exactly this JSON and nothing else (no markdown, no code fence):
 {"message":"<pitch text>","estimatedTime":"<e.g. 24h or 3 days>","price":<number>}`;
 
-  const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: userContent }],
-  });
+  let response;
+  try {
+    response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: userContent }],
+    });
+  } catch (apiErr) {
+    // Surface the full error details (status, message) so callers can log them
+    const status = apiErr.status ?? apiErr.statusCode ?? 'unknown';
+    const detail = apiErr.message || String(apiErr);
+    throw new Error(`Anthropic API error [${status}] model=${MODEL}: ${detail}`);
+  }
 
   const text =
     response.content &&
@@ -67,7 +78,7 @@ Reply with exactly this JSON and nothing else (no markdown, no code fence):
   // Parse JSON (allow trailing content after closing brace)
   const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error('Claude did not return valid JSON');
+    throw new Error(`Claude returned non-JSON response: ${trimmed.slice(0, 200)}`);
   }
   let parsed;
   try {

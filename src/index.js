@@ -14,9 +14,11 @@ import { dashboardRouter } from './routes/dashboard.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { searchRouter } from './routes/search.js';
 import { followsRouter } from './routes/follows.js';
+import { notionRouter } from './routes/notion.js';
 import { errorHandler } from './middleware/errorHandler.js';
-import { startPitchingEngine } from './services/pitchingEngine.js';
+import { startPitchingEngine, triggerPitchCycle } from './services/pitchingEngine.js';
 import { startBuildWorker } from './services/buildWorker.js';
+import { supabase } from './lib/supabase.js';
 
 const PORT = process.env.PORT || 4000;
 const app = express();
@@ -40,8 +42,36 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/search', searchRouter);
 app.use('/api/follows', followsRouter);
+app.use('/api/notion', notionRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
+
+// ── Admin: Pitch Engine ──────────────────────────────────────────────────────
+
+/** GET /api/admin/pitch-engine/logs — last 50 log entries */
+app.get('/api/admin/pitch-engine/logs', async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const level = req.query.level; // optional: 'error' | 'info'
+  let q = supabase
+    .from('pitch_engine_logs')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (level) q = q.eq('level', level);
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ logs: data || [] });
+});
+
+/** POST /api/admin/pitch-engine/trigger — manually run one pitch cycle */
+app.post('/api/admin/pitch-engine/trigger', async (req, res) => {
+  try {
+    const result = await triggerPitchCycle();
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.use(errorHandler);
 

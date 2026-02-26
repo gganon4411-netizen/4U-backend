@@ -4,9 +4,22 @@ import { generatePitch } from './claudeClient.js';
 const POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
 const WEBHOOK_TIMEOUT_MS = 5000;
 
-/**
- * Fire-and-forget POST to a webhook URL. 5s timeout, errors caught silently.
- */
+// ──────────────────────────────────────────────
+// Supabase error / event logger
+// ──────────────────────────────────────────────
+
+async function logEngine(level, message, metadata = {}) {
+  try {
+    await supabase.from('pitch_engine_logs').insert({ level, message, metadata });
+  } catch (_) {
+    // Never let logging itself crash the engine
+  }
+}
+
+// ──────────────────────────────────────────────
+// Webhook helper
+// ──────────────────────────────────────────────
+
 function fireWebhook(url, payload) {
   if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
   const controller = new AbortController();
@@ -21,9 +34,10 @@ function fireWebhook(url, payload) {
     .finally(() => clearTimeout(timeoutId));
 }
 
-/**
- * Fetch open requests (status = 'Open').
- */
+// ──────────────────────────────────────────────
+// DB fetchers
+// ──────────────────────────────────────────────
+
 async function fetchOpenRequests() {
   const { data, error } = await supabase
     .from('requests')
@@ -34,9 +48,6 @@ async function fetchOpenRequests() {
   return data || [];
 }
 
-/**
- * Fetch agents that have auto_pitch_enabled = true, with their settings and profile.
- */
 async function fetchAutoPitchAgents() {
   const { data: settingsRows, error: settingsErr } = await supabase
     .from('agent_settings')
@@ -53,20 +64,12 @@ async function fetchAutoPitchAgents() {
   if (agentsErr) throw agentsErr;
   if (!agents || agents.length === 0) return [];
 
-  const settingsByAgent = Object.fromEntries(
-    settingsRows.map((r) => [r.agent_id, r])
-  );
+  const settingsByAgent = Object.fromEntries(settingsRows.map((r) => [r.agent_id, r]));
   return agents
     .filter((a) => settingsByAgent[a.id] && a.availability === 'available')
-    .map((a) => ({
-      ...a,
-      settings: settingsByAgent[a.id],
-    }));
+    .map((a) => ({ ...a, settings: settingsByAgent[a.id] }));
 }
 
-/**
- * Fetch SDK agents with auto_pitch = true and is_active = true.
- */
 async function fetchSdkAutoPitchAgents() {
   const { data, error } = await supabase
     .from('sdk_agents')
@@ -77,9 +80,6 @@ async function fetchSdkAutoPitchAgents() {
   return data || [];
 }
 
-/**
- * Check if this SDK agent already pitched on this request (sdk_pitches).
- */
 async function sdkAgentAlreadyPitched(requestId, sdkAgentId) {
   const { data, error } = await supabase
     .from('sdk_pitches')
@@ -91,9 +91,6 @@ async function sdkAgentAlreadyPitched(requestId, sdkAgentId) {
   return !!data;
 }
 
-/**
- * Count how many pitches this agent has on open requests (not completed).
- */
 async function countAgentOpenPitches(agentId) {
   const { data: openRequestIds } = await supabase
     .from('requests')
@@ -110,9 +107,6 @@ async function countAgentOpenPitches(agentId) {
   return count ?? 0;
 }
 
-/**
- * Check if this agent already pitched on this request.
- */
 async function agentAlreadyPitched(requestId, agentId) {
   const { data, error } = await supabase
     .from('pitches')
@@ -124,31 +118,32 @@ async function agentAlreadyPitched(requestId, agentId) {
   return !!data;
 }
 
-/**
- * Check if agent's specializations match request categories (at least one overlap).
- */
+// ──────────────────────────────────────────────
+// Matching helpers
+// ──────────────────────────────────────────────
+
 function specializationMatch(agentSpecializations, requestCategories) {
   const specs = new Set((agentSpecializations || []).map((s) => s.trim()));
   const cats = requestCategories || [];
-  if (cats.length === 0) return true;
+  // If agent has no specializations OR request has no categories → match everything
+  if (specs.size === 0 || cats.length === 0) return true;
   return cats.some((c) => specs.has(c));
 }
 
-/**
- * Check if request budget meets agent's min_budget.
- */
 function budgetMatch(requestBudget, agentMinBudget) {
   if (agentMinBudget == null) return true;
   if (requestBudget == null) return true;
   return Number(requestBudget) >= Number(agentMinBudget);
 }
 
-/**
- * Run one cycle: find (request, agent) pairs and generate + post pitches.
- */
+// ──────────────────────────────────────────────
+// Main cycle
+// ──────────────────────────────────────────────
+
 async function runPitchCycle() {
   if (!process.env.ANTHROPIC_API_KEY) {
-    return; // skip silently if no API key
+    await logEngine('error', 'ANTHROPIC_API_KEY is not set — pitching engine skipping cycle');
+    return;
   }
 
   try {
@@ -157,7 +152,11 @@ async function runPitchCycle() {
       fetchAutoPitchAgents(),
       fetchSdkAutoPitchAgents(),
     ]);
+
     if (requests.length === 0) return;
+
+    let pitched = 0;
+    let errors = 0;
 
     for (const req of requests) {
       const requestBrief = {
@@ -168,6 +167,7 @@ async function runPitchCycle() {
         timeline: req.timeline || null,
       };
 
+      // ── Internal agents ──
       for (const agent of agents) {
         const { settings } = agent;
         if (!budgetMatch(req.budget, settings.min_budget)) continue;
@@ -195,10 +195,16 @@ async function runPitchCycle() {
             pitchAggression: settings.pitch_aggression ?? 3,
           });
         } catch (err) {
-          console.error(
-            `[pitchingEngine] Claude pitch failed for agent ${agent.name} request ${req.id}:`,
-            err.message
-          );
+          errors++;
+          const msg = `Pitch generation failed — agent: ${agent.name}, request: ${req.title}: ${err.message}`;
+          console.error('[pitchingEngine]', msg);
+          await logEngine('error', msg, {
+            agent_id: agent.id,
+            agent_name: agent.name,
+            request_id: req.id,
+            request_title: req.title,
+            error: err.message,
+          });
           continue;
         }
 
@@ -210,22 +216,28 @@ async function runPitchCycle() {
           estimated_time: result.estimatedTime,
           price: result.price,
         });
+
         if (insertErr) {
-          if (insertErr.code === '23505') {
-            // unique violation - already pitched in parallel
-            continue;
-          }
-          console.error(
-            `[pitchingEngine] Insert pitch failed agent ${agent.id} request ${req.id}:`,
-            insertErr.message
-          );
+          if (insertErr.code === '23505') continue; // duplicate — fine
+          const msg = `Pitch insert failed — agent: ${agent.id}, request: ${req.id}: ${insertErr.message}`;
+          console.error('[pitchingEngine]', msg);
+          await logEngine('error', msg, { agent_id: agent.id, request_id: req.id, db_error: insertErr.message });
           continue;
         }
-        console.log(
-          `[pitchingEngine] Posted pitch: agent ${agent.name} -> request ${req.title?.slice(0, 40)}`
-        );
+
+        pitched++;
+        console.log(`[pitchingEngine] ✓ ${agent.name} → "${req.title?.slice(0, 40)}"`);
+        await logEngine('info', `Pitch posted: ${agent.name} → ${req.title?.slice(0, 60)}`, {
+          agent_id: agent.id,
+          agent_name: agent.name,
+          request_id: req.id,
+          request_title: req.title,
+          price: result.price,
+          estimated_time: result.estimatedTime,
+        });
       }
 
+      // ── SDK agents ──
       for (const sdkAgent of sdkAgents) {
         if (!budgetMatch(req.budget, sdkAgent.min_budget)) continue;
         if (!specializationMatch(sdkAgent.specializations, req.categories)) continue;
@@ -246,10 +258,16 @@ async function runPitchCycle() {
         try {
           result = await generatePitch(requestBrief, agentProfile, { pitchAggression: 3 });
         } catch (err) {
-          console.error(
-            `[pitchingEngine] Claude pitch failed for SDK agent ${sdkAgent.name} request ${req.id}:`,
-            err.message
-          );
+          errors++;
+          const msg = `SDK pitch generation failed — agent: ${sdkAgent.name}, request: ${req.title}: ${err.message}`;
+          console.error('[pitchingEngine]', msg);
+          await logEngine('error', msg, {
+            sdk_agent_id: sdkAgent.id,
+            sdk_agent_name: sdkAgent.name,
+            request_id: req.id,
+            request_title: req.title,
+            error: err.message,
+          });
           continue;
         }
 
@@ -266,12 +284,13 @@ async function runPitchCycle() {
           })
           .select('id')
           .single();
+
         if (pitchInsertErr) {
           if (pitchInsertErr.code === '23505') continue;
-          console.error(
-            `[pitchingEngine] Insert pitch failed SDK agent ${sdkAgent.id} request ${req.id}:`,
-            pitchInsertErr.message
-          );
+          await logEngine('error', `SDK pitch insert failed: ${pitchInsertErr.message}`, {
+            sdk_agent_id: sdkAgent.id,
+            request_id: req.id,
+          });
           continue;
         }
 
@@ -284,18 +303,25 @@ async function runPitchCycle() {
           estimated_time: result.estimatedTime,
           status: 'submitted',
         });
+
         if (sdkPitchErr) {
           if (sdkPitchErr.code === '23505') continue;
-          console.error(
-            `[pitchingEngine] Insert sdk_pitches failed SDK agent ${sdkAgent.id} request ${req.id}:`,
-            sdkPitchErr.message
-          );
+          await logEngine('error', `sdk_pitches insert failed: ${sdkPitchErr.message}`, {
+            sdk_agent_id: sdkAgent.id,
+            request_id: req.id,
+          });
           continue;
         }
 
-        console.log(
-          `[pitchingEngine] Posted SDK pitch: ${sdkAgent.name} -> request ${req.title?.slice(0, 40)}`
-        );
+        pitched++;
+        console.log(`[pitchingEngine] ✓ SDK ${sdkAgent.name} → "${req.title?.slice(0, 40)}"`);
+        await logEngine('info', `SDK pitch posted: ${sdkAgent.name} → ${req.title?.slice(0, 60)}`, {
+          sdk_agent_id: sdkAgent.id,
+          sdk_agent_name: sdkAgent.name,
+          request_id: req.id,
+          request_title: req.title,
+          price: result.price,
+        });
 
         if (sdkAgent.webhook_url) {
           fireWebhook(sdkAgent.webhook_url, {
@@ -318,30 +344,42 @@ async function runPitchCycle() {
         }
       }
     }
+
+    if (pitched > 0 || errors > 0) {
+      console.log(`[pitchingEngine] Cycle complete — pitched: ${pitched}, errors: ${errors}`);
+    }
   } catch (err) {
-    console.error('[pitchingEngine] Cycle error:', err);
+    console.error('[pitchingEngine] Cycle fatal error:', err);
+    await logEngine('error', `Cycle fatal error: ${err.message}`, { stack: err.stack });
   }
 }
 
+// ──────────────────────────────────────────────
+// Public API
+// ──────────────────────────────────────────────
+
 let intervalId = null;
 
-/**
- * Start the pitching engine (poll every 60 seconds).
- */
 export function startPitchingEngine() {
   if (intervalId != null) return;
-  runPitchCycle(); // run once immediately
+  runPitchCycle(); // immediate first run
   intervalId = setInterval(runPitchCycle, POLL_INTERVAL_MS);
   console.log('[pitchingEngine] Started (interval 60s)');
 }
 
-/**
- * Stop the pitching engine.
- */
 export function stopPitchingEngine() {
   if (intervalId != null) {
     clearInterval(intervalId);
     intervalId = null;
     console.log('[pitchingEngine] Stopped');
   }
+}
+
+/**
+ * Manually trigger one pitch cycle and return a status summary.
+ * Used by the /api/admin/pitch-engine/* endpoints.
+ */
+export async function triggerPitchCycle() {
+  await runPitchCycle();
+  return { triggered: true, timestamp: new Date().toISOString() };
 }
