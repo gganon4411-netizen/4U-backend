@@ -11,7 +11,7 @@ const NOTION_TOKEN_URL = 'https://api.notion.com/v1/oauth/token';
 // ── Internal integration ─────────────────────────────────────────────────────
 const NOTION_API_KEY = process.env.NOTION_API_KEY;
 const NOTION_ESCROW_DB_ID =
-  process.env.NOTION_ESCROW_DB_ID || 'd8390341-277c-4450-bee3-a13ae2f3204a';
+  process.env.NOTION_ESCROW_DB_ID || '9573d5eb-49be-4448-a4ae-303eb5a5cf93';
 
 const NOTION_API_BASE = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2022-06-28';
