@@ -169,10 +169,6 @@ function budgetMatch(requestBudget, agentMinBudget) {
 // ──────────────────────────────────────────────
 
 async function runPitchCycle() {
-  // #region agent log
-  console.log('[pitchingEngine][DEBUG] Cycle started, hasAnthropicKey:', !!process.env.ANTHROPIC_API_KEY);
-  fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:runPitchCycle',message:'Cycle started',data:{hasAnthropicKey:!!process.env.ANTHROPIC_API_KEY},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
   if (!process.env.ANTHROPIC_API_KEY) {
     await logEngine('error', 'ANTHROPIC_API_KEY is not set — pitching engine skipping cycle');
     return;
@@ -184,14 +180,6 @@ async function runPitchCycle() {
       fetchAutoPitchAgents(),
       fetchSdkAutoPitchAgents(),
     ]);
-
-    // #region agent log
-    console.log(`[pitchingEngine][DEBUG] Fetched: requests=${requests.length}, internalAgents=${agents.length}, sdkAgents=${sdkAgents.length}`);
-    console.log('[pitchingEngine][DEBUG] Request titles:', requests.map(r=>r.title));
-    console.log('[pitchingEngine][DEBUG] Internal agents:', agents.map(a=>a.name));
-    console.log('[pitchingEngine][DEBUG] SDK agents:', sdkAgents.map(a=>a.name));
-    fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:afterFetch',message:'Fetched data',data:{requestCount:requests.length,requestTitles:requests.map(r=>r.title),internalAgentCount:agents.length,internalAgentNames:agents.map(a=>a.name),sdkAgentCount:sdkAgents.length,sdkAgentNames:sdkAgents.map(a=>a.name)},timestamp:Date.now(),hypothesisId:'B,C'})}).catch(()=>{});
-    // #endregion
 
     if (requests.length === 0) return;
 
@@ -210,35 +198,15 @@ async function runPitchCycle() {
       // ── Internal agents ──
       for (const agent of agents) {
         const { settings } = agent;
-        if (!budgetMatch(req.budget, settings.min_budget)) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:internalBudgetSkip',message:'Internal agent skipped: budget',data:{agent:agent.name,reqTitle:req.title,reqBudget:req.budget,minBudget:settings.min_budget},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
-        if (!specializationMatch(agent.specializations, req.categories)) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:internalSpecSkip',message:'Internal agent skipped: specialization',data:{agent:agent.name,reqTitle:req.title,agentSpecs:agent.specializations,reqCats:req.categories},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
+        if (!budgetMatch(req.budget, settings.min_budget)) continue;
+        if (!specializationMatch(agent.specializations, req.categories)) continue;
 
         const [openPitches, alreadyPitched] = await Promise.all([
           countAgentOpenPitches(agent.id),
           agentAlreadyPitched(req.id, agent.id),
         ]);
-        if (alreadyPitched) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:internalAlreadyPitched',message:'Internal agent skipped: already pitched',data:{agent:agent.name,reqTitle:req.title},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
-        if (openPitches >= (settings.max_concurrent_pitches ?? 10)) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:internalMaxPitches',message:'Internal agent skipped: max pitches',data:{agent:agent.name,openPitches,max:settings.max_concurrent_pitches??10},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
+        if (alreadyPitched) continue;
+        if (openPitches >= (settings.max_concurrent_pitches ?? 10)) continue;
 
         const agentProfile = {
           name: agent.name,
@@ -299,26 +267,11 @@ async function runPitchCycle() {
 
       // ── SDK agents ──
       for (const sdkAgent of sdkAgents) {
-        if (!budgetMatch(req.budget, sdkAgent.min_budget)) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:sdkBudgetSkip',message:'SDK agent skipped: budget',data:{agent:sdkAgent.name,reqTitle:req.title,reqBudget:req.budget,minBudget:sdkAgent.min_budget},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
-        if (!specializationMatch(sdkAgent.specializations, req.categories)) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:sdkSpecSkip',message:'SDK agent skipped: specialization',data:{agent:sdkAgent.name,reqTitle:req.title,agentSpecs:sdkAgent.specializations,reqCats:req.categories},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
+        if (!budgetMatch(req.budget, sdkAgent.min_budget)) continue;
+        if (!specializationMatch(sdkAgent.specializations, req.categories)) continue;
 
         const alreadyPitched = await sdkAgentAlreadyPitched(req.id, sdkAgent.id);
-        if (alreadyPitched) {
-          // #region agent log
-          fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:sdkAlreadyPitched',message:'SDK agent skipped: already pitched',data:{agent:sdkAgent.name,reqTitle:req.title},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
-          continue;
-        }
+        if (alreadyPitched) continue;
 
         const agentProfile = {
           name: sdkAgent.name,
@@ -420,17 +373,10 @@ async function runPitchCycle() {
       }
     }
 
-    // #region agent log
-    console.log(`[pitchingEngine][DEBUG] Cycle finished: pitched=${pitched}, errors=${errors}`);
-    fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:cycleEnd',message:'Cycle finished',data:{pitched,errors},timestamp:Date.now(),hypothesisId:'A,E'})}).catch(()=>{});
-    // #endregion
     if (pitched > 0 || errors > 0) {
       console.log(`[pitchingEngine] Cycle complete — pitched: ${pitched}, errors: ${errors}`);
     }
   } catch (err) {
-    // #region agent log
-    fetch('http://127.0.0.1:7851/ingest/32f37487-47b7-4d6d-98f4-60d449366ae9',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7d440e'},body:JSON.stringify({sessionId:'7d440e',location:'pitchingEngine.js:cycleFatalError',message:'Cycle fatal error',data:{error:err.message,stack:err.stack?.slice(0,500)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     console.error('[pitchingEngine] Cycle fatal error:', err);
     await logEngine('error', `Cycle fatal error: ${err.message}`, { stack: err.stack });
   }
