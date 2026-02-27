@@ -2,6 +2,12 @@ import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createNotification } from '../lib/notify.js';
+import {
+  verifyUsdcDeposit,
+  releaseToAgent,
+  refundToBuyer,
+  PLATFORM_FEE_BPS,
+} from '../lib/solanaEscrow.js';
 
 const router = Router();
 
@@ -19,6 +25,9 @@ function mapBuild(row) {
     delivery_url: row.delivery_url,
     agent_payout: row.agent_payout != null ? Number(row.agent_payout) : null,
     platform_fee: row.platform_fee != null ? Number(row.platform_fee) : null,
+    deposit_tx_signature: row.deposit_tx_signature || null,
+    release_tx_signature: row.release_tx_signature || null,
+    refund_tx_signature: row.refund_tx_signature || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -26,15 +35,22 @@ function mapBuild(row) {
 
 /**
  * POST /api/hire
- * Body: { requestId, pitchId }
+ * Body: { requestId, pitchId, txSignature }
  * Auth required. Requester must own the request. Request must be Open. Pitch must exist for that request.
+ * txSignature: Solana tx where buyer sent USDC to escrow wallet — verified on-chain before locking.
  * Creates build (status hired), sets request escrow locked, request status In Progress. Returns build.
  */
 router.post('/', requireAuth, async (req, res, next) => {
   try {
-    const { requestId, pitchId } = req.body || {};
+    const { requestId, pitchId, txSignature } = req.body || {};
     if (!requestId || !pitchId) {
       return res.status(400).json({ error: 'requestId and pitchId are required' });
+    }
+    if (!txSignature) {
+      return res.status(400).json({
+        error: 'txSignature is required',
+        message: 'Send USDC to the escrow wallet first, then pass the transaction signature.',
+      });
     }
 
     const userId = req.user.sub;
@@ -65,6 +81,30 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const escrowAmount = pitch.price != null ? Number(pitch.price) : 0;
+
+    // ── Verify USDC deposit on-chain before locking escrow ────────────────────
+    if (escrowAmount > 0) {
+      const { data: user } = await supabase
+        .from('users')
+        .select('wallet_address')
+        .eq('id', userId)
+        .single();
+
+      const { verified, actualAmount, error: verifyErr } = await verifyUsdcDeposit(
+        txSignature,
+        user.wallet_address,
+        escrowAmount
+      );
+
+      if (!verified) {
+        return res.status(400).json({
+          error: 'USDC deposit verification failed',
+          message: verifyErr || 'Could not verify on-chain USDC transfer',
+        });
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     const isSdkPitch = pitch.agent_id == null;
 
     let sdkPitchRow = null;
@@ -90,6 +130,7 @@ router.post('/', requireAuth, async (req, res, next) => {
           status: 'hired',
           escrow_amount: escrowAmount,
           escrow_status: 'locked',
+          deposit_tx_signature: txSignature,
         })
         .select()
         .single();
@@ -137,6 +178,7 @@ router.post('/', requireAuth, async (req, res, next) => {
         status: 'hired',
         escrow_amount: escrowAmount,
         escrow_status: 'locked',
+        deposit_tx_signature: txSignature,
       })
       .select()
       .single();
@@ -237,8 +279,48 @@ router.post('/:buildId/accept', requireAuth, async (req, res, next) => {
     }
 
     const escrowAmount = Number(build.escrow_amount) || 0;
-    const agentPayout = Math.round(escrowAmount * 0.88 * 100) / 100;
-    const platformFee = Math.round(escrowAmount * 0.12 * 100) / 100;
+
+    // ── Look up agent wallet for on-chain transfer ────────────────────────────
+    let agentWallet = null;
+    if (build.agent_id) {
+      const { data: agent } = await supabase
+        .from('agents')
+        .select('owner_wallet')
+        .eq('id', build.agent_id)
+        .single();
+      agentWallet = agent?.owner_wallet || null;
+    } else {
+      // SDK agent — find via sdk_pitches
+      const { data: sdkPitch } = await supabase
+        .from('sdk_pitches')
+        .select('sdk_agent_id')
+        .eq('main_pitch_id', build.agent_name) // fallback
+        .maybeSingle();
+      if (sdkPitch) {
+        const { data: sdkAgent } = await supabase
+          .from('sdk_agents')
+          .select('owner_wallet')
+          .eq('id', sdkPitch.sdk_agent_id)
+          .single();
+        agentWallet = sdkAgent?.owner_wallet || null;
+      }
+    }
+
+    // ── Send USDC on-chain (98% to agent, 2% stays in escrow wallet as fee) ───
+    let releaseTxSig = null;
+    let agentPayout = 0;
+    let platformFee = 0;
+
+    if (escrowAmount > 0 && agentWallet) {
+      const releaseResult = await releaseToAgent(agentWallet, escrowAmount);
+      releaseTxSig  = releaseResult.txSignature;
+      agentPayout   = releaseResult.agentPayout;
+      platformFee   = releaseResult.platformFee;
+    } else {
+      // No wallet on file or zero escrow — calculate split without on-chain transfer
+      agentPayout = Math.round(escrowAmount * (10000 - PLATFORM_FEE_BPS)) / 10000;
+      platformFee = escrowAmount - agentPayout;
+    }
 
     const { data: updated, error: updateErr } = await supabase
       .from('builds')
@@ -247,6 +329,7 @@ router.post('/:buildId/accept', requireAuth, async (req, res, next) => {
         escrow_status: 'released',
         agent_payout: agentPayout,
         platform_fee: platformFee,
+        release_tx_signature: releaseTxSig,
       })
       .eq('id', buildId)
       .select()
@@ -255,10 +338,7 @@ router.post('/:buildId/accept', requireAuth, async (req, res, next) => {
 
     await supabase
       .from('requests')
-      .update({
-        escrow_status: 'released',
-        status: 'Completed',
-      })
+      .update({ escrow_status: 'released', status: 'Completed' })
       .eq('id', build.request_id);
 
     res.json(mapBuild(updated));
@@ -308,9 +388,30 @@ router.post('/:buildId/cancel', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Escrow is frozen pending dispute resolution' });
     }
 
+    // Need escrow_amount for refund — re-fetch with it
+    const { data: buildFull } = await supabase
+      .from('builds')
+      .select('escrow_amount')
+      .eq('id', buildId)
+      .single();
+    const escrowAmount = Number(buildFull?.escrow_amount) || 0;
+
+    // ── Refund buyer on-chain ─────────────────────────────────────────────────
+    const { data: requesterUser } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('id', userId)
+      .single();
+
+    let refundTxSig = null;
+    if (escrowAmount > 0 && requesterUser?.wallet_address) {
+      const refundResult = await refundToBuyer(requesterUser.wallet_address, escrowAmount);
+      refundTxSig = refundResult.txSignature;
+    }
+
     const { data: updated, error: updateErr } = await supabase
       .from('builds')
-      .update({ status: 'cancelled', escrow_status: 'refunded' })
+      .update({ status: 'cancelled', escrow_status: 'refunded', refund_tx_signature: refundTxSig })
       .eq('id', buildId)
       .select()
       .single();
