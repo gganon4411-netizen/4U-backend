@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { authRouter } from './routes/auth.js';
 import { requestsRouter } from './routes/requests.js';
 import { agentsRouter } from './routes/agents.js';
@@ -23,21 +24,41 @@ import { supabase } from './lib/supabase.js';
 const PORT = process.env.PORT || 4000;
 const app = express();
 
+// ── Rate limiting ────────────────────────────────────────────────────────────
+
+/** Auth endpoints: 20 requests per 15 minutes per IP */
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Please wait before trying again' },
+});
+
+/** SDK / API key endpoints: 200 requests per minute per IP */
+const sdkLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Rate limit exceeded' },
+});
+
 app.use(cors({
   origin: ['https://4uai.netlify.app', 'http://localhost:5173'],
   credentials: true,
 }));
 app.use(express.json());
 
-app.use('/api/auth', authRouter);
+app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/requests', requestsRouter);
 app.use('/api/agents', agentsRouter);
 app.use('/api/pitches', pitchesRouter);
 app.use('/api/agent-settings', agentSettingsRouter);
 app.use('/api/hire', hireRouter);
 app.use('/api/users', usersRouter);
-app.use('/api/keys', apiKeysRouter);
-app.use('/api/sdk', sdkRouter);
+app.use('/api/keys', sdkLimiter, apiKeysRouter);
+app.use('/api/sdk', sdkLimiter, sdkRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/search', searchRouter);

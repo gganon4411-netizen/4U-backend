@@ -18,6 +18,7 @@ const SIGN_IN_MESSAGE = (nonce) =>
 /**
  * GET /api/auth/nonce/:walletAddress
  * Get a nonce for the given wallet address (Solana base58 public key).
+ * Nonce is persisted server-side with a 5-minute TTL for replay protection.
  */
 router.get('/nonce/:walletAddress', async (req, res, next) => {
   try {
@@ -30,7 +31,16 @@ router.get('/nonce/:walletAddress', async (req, res, next) => {
     } catch {
       return res.status(400).json({ error: 'Invalid Solana wallet address' });
     }
+
     const nonce = `${walletAddress}:${Date.now().toString(36)}`;
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 min TTL
+
+    const { error: insertErr } = await supabase
+      .from('auth_nonces')
+      .insert({ nonce, wallet: walletAddress, expires_at: expiresAt });
+
+    if (insertErr) throw insertErr;
+
     res.json({ nonce, message: SIGN_IN_MESSAGE(nonce) });
   } catch (e) {
     next(e);
@@ -80,6 +90,42 @@ router.post('/wallet', async (req, res, next) => {
     if (!valid) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
+
+    // ── Nonce validation: must exist, belong to this wallet, not used, not expired ──
+    // Extract the nonce from the message (format: "...Nonce: <nonce>")
+    const nonceMatch = message.match(/Nonce:\s*(\S+)$/m);
+    if (!nonceMatch) {
+      return res.status(400).json({ error: 'Nonce not found in message' });
+    }
+    const nonce = nonceMatch[1];
+
+    const { data: nonceRow, error: nonceFetchErr } = await supabase
+      .from('auth_nonces')
+      .select('id, used, expires_at, wallet')
+      .eq('nonce', nonce)
+      .single();
+
+    if (nonceFetchErr || !nonceRow) {
+      return res.status(401).json({ error: 'Invalid or unknown nonce' });
+    }
+    if (nonceRow.wallet !== address) {
+      return res.status(401).json({ error: 'Nonce was issued for a different wallet' });
+    }
+    if (nonceRow.used) {
+      return res.status(401).json({ error: 'Nonce has already been used' });
+    }
+    if (new Date(nonceRow.expires_at) < new Date()) {
+      return res.status(401).json({ error: 'Nonce has expired' });
+    }
+
+    // Mark nonce used atomically — second concurrent request will see used=true
+    const { error: markErr } = await supabase
+      .from('auth_nonces')
+      .update({ used: true })
+      .eq('id', nonceRow.id)
+      .eq('used', false); // guard: only update if still false
+
+    if (markErr) throw markErr;
 
     // Upsert: insert or update by wallet_address. On conflict only update last_seen_at; leave display_name, bio, username etc unchanged.
     const { data: user, error: upsertError } = await supabase
