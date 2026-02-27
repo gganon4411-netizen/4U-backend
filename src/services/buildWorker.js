@@ -28,7 +28,7 @@ async function claimNextJob() {
     log(`Error claiming job: ${error.message}`);
     return null;
   }
-  return data || null;
+  return (data && data.id) ? data : null; // Supabase wraps null row as { id: null, ... }
 }
 
 /**
