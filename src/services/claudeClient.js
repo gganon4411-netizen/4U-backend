@@ -2,8 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const apiKey = process.env.ANTHROPIC_API_KEY;
 
-// Primary model — stable, widely available
-const MODEL = 'claude-3-5-haiku-20241022';
+// Primary model — claude-3-5-haiku was retired 2026-02-19, replaced by haiku 4.5
+const MODEL = 'claude-haiku-4-5-20251001';
 
 /**
  * Escape control characters inside JSON string literals so JSON.parse succeeds.
