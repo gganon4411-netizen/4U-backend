@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireAnyKey } from '../middleware/sdkAuth.js';
+import { supabase } from '../lib/supabase.js';
 
 const router = Router();
 
@@ -133,7 +134,7 @@ router.post('/token', async (req, res, next) => {
  */
 router.get('/escrow/items', requireAnyKey, async (req, res, next) => {
   try {
-    const { status, severity, area, release_gate, limit = 50, cursor } = req.query;
+    const { status, severity, area, release_gate, assigned_agent, limit = 50, cursor } = req.query;
 
     const filters = [];
     if (status) {
@@ -150,6 +151,9 @@ router.get('/escrow/items', requireAnyKey, async (req, res, next) => {
         property: 'Release Gate',
         checkbox: { equals: release_gate === 'true' },
       });
+    }
+    if (assigned_agent) {
+      filters.push({ property: 'Assigned Agent', select: { equals: assigned_agent } });
     }
 
     const body = {
@@ -169,6 +173,76 @@ router.get('/escrow/items', requireAnyKey, async (req, res, next) => {
     });
 
     res.json({
+      items: (data.results || []).map(flattenEscrowPage),
+      has_more: data.has_more || false,
+      next_cursor: data.next_cursor || null,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  }
+});
+
+/**
+ * GET /api/notion/escrow/my-tasks
+ * Returns Escrow Tracker items assigned to the calling SDK agent.
+ * The agent's name (from sdk_agents.name) is automatically matched
+ * against the Notion "Assigned Agent" select field.
+ *
+ * Query params (all optional):
+ *   status    — filter by status (e.g. "Not started", "In progress")
+ *   severity  — filter by severity (e.g. "P0", "P1")
+ *   area      — filter by area
+ *   limit     — max results (default 50)
+ *   cursor    — pagination cursor
+ *
+ * Auth: requires x-4u-api-key header (SDK agent key only)
+ */
+router.get('/escrow/my-tasks', requireAnyKey, async (req, res, next) => {
+  try {
+    if (req.apiKey.source !== 'sdk_agents') {
+      return res.status(400).json({
+        error: 'This endpoint is only available to SDK agents. Use /escrow/items with ?assigned_agent= for other key types.',
+      });
+    }
+
+    // Look up agent name from sdk_agents
+    const { data: agent, error: agentErr } = await supabase
+      .from('sdk_agents')
+      .select('id, name')
+      .eq('id', req.apiKey.id)
+      .single();
+
+    if (agentErr || !agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    const { status, severity, area, limit = 50, cursor } = req.query;
+
+    const filters = [
+      { property: 'Assigned Agent', select: { equals: agent.name } },
+    ];
+    if (status)   filters.push({ property: 'Status',   status: { equals: status } });
+    if (severity) filters.push({ property: 'Severity', select: { equals: severity } });
+    if (area)     filters.push({ property: 'Area',     select: { equals: area } });
+
+    const body = {
+      page_size: Math.min(Number(limit) || 50, 100),
+      filter: { and: filters },
+      sorts: [
+        { property: 'Severity', direction: 'ascending' },
+        { property: 'Status',   direction: 'ascending' },
+      ],
+    };
+    if (cursor) body.start_cursor = cursor;
+
+    const data = await notionFetch(`/databases/${NOTION_ESCROW_DB_ID}/query`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
+    res.json({
+      agent_name: agent.name,
       items: (data.results || []).map(flattenEscrowPage),
       has_more: data.has_more || false,
       next_cursor: data.next_cursor || null,
