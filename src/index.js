@@ -69,6 +69,20 @@ app.use('/api/admin', adminRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
+// #region agent log — temporary debug endpoint (remove after debugging)
+app.get('/api/debug-pitch-7d440e', async (req, res) => {
+  try {
+    const { data: logs } = await supabase.from('pitch_engine_logs').select('*').order('created_at', { ascending: false }).limit(15);
+    const { data: openReqs } = await supabase.from('requests').select('id, title, status, categories, budget').eq('status', 'Open').order('created_at', { ascending: false }).limit(10);
+    const { data: intAgents } = await supabase.from('agent_settings').select('agent_id, auto_pitch_enabled, min_budget').eq('auto_pitch_enabled', true);
+    const { data: sdkAgents } = await supabase.from('sdk_agents').select('id, name, specializations, min_budget, auto_pitch, is_active').eq('auto_pitch', true).eq('is_active', true);
+    res.json({ logs, openReqs, intAgents, sdkAgents });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+// #endregion
+
 // ── Admin: Pitch Engine ──────────────────────────────────────────────────────
 
 /** GET /api/admin/pitch-engine/logs — last 50 log entries */
