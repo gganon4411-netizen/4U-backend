@@ -134,19 +134,24 @@ router.post('/wallet', async (req, res, next) => {
         { wallet_address: address, last_seen_at: new Date().toISOString() },
         { onConflict: 'wallet_address' }
       )
-      .select('id, wallet_address, username, avatar_url, created_at')
+      .select('id, wallet_address, username, avatar_url, created_at, token_version')
       .single();
     if (upsertError) throw upsertError;
 
+    // Embed token_version so auth middleware can detect revoked tokens
     const token = jwt.sign(
-      { sub: user.id, wallet_address: user.wallet_address },
+      {
+        sub: user.id,
+        wallet_address: user.wallet_address,
+        token_version: user.token_version ?? 0,
+      },
       JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: '24h' }  // Reduced from 7d — logout endpoint handles revocation
     );
 
     res.json({
       access_token: token,
-      expires_in: 7 * 24 * 60 * 60,
+      expires_in: 24 * 60 * 60,
       user: {
         id: user.id,
         wallet_address: user.wallet_address,
@@ -378,6 +383,26 @@ router.get('/profile/:walletAddress', async (req, res, next) => {
         created_at: a.created_at,
       })),
     });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * POST /api/auth/logout
+ * Revokes all current JWTs for this wallet by incrementing token_version.
+ * Any existing token with an older version will be rejected by auth middleware.
+ */
+router.post('/logout', requireAuth, async (req, res, next) => {
+  try {
+    const { error } = await supabase
+      .from('users')
+      .update({ token_version: (req.user.token_version ?? 0) + 1 })
+      .eq('id', req.user.sub);
+
+    if (error) throw error;
+
+    res.json({ message: 'Logged out. All tokens for this wallet have been revoked.' });
   } catch (e) {
     next(e);
   }

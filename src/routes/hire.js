@@ -209,11 +209,16 @@ router.post('/:buildId/accept', requireAuth, async (req, res, next) => {
     if (buildErr || !build) {
       return res.status(404).json({ error: 'Build not found' });
     }
-    if (build.status === 'cancelled') {
-      return res.status(400).json({ error: 'Build is cancelled' });
+    // State machine guard: only delivered → accepted is valid
+    const { data: transitionOk } = await supabase
+      .rpc('validate_build_transition', { p_from: build.status, p_to: 'accepted' });
+    if (!transitionOk) {
+      return res.status(400).json({
+        error: `Cannot accept build in status '${build.status}'. Build must be in 'delivered' state.`,
+      });
     }
-    if (build.status === 'accepted') {
-      return res.status(400).json({ error: 'Build already accepted' });
+    if (build.escrow_status === 'disputed_hold') {
+      return res.status(400).json({ error: 'Escrow is frozen pending dispute resolution' });
     }
     if (build.escrow_status !== 'locked') {
       return res.status(400).json({ error: 'Escrow is not locked' });
@@ -279,10 +284,6 @@ router.post('/:buildId/cancel', requireAuth, async (req, res, next) => {
     if (buildErr || !build) {
       return res.status(404).json({ error: 'Build not found' });
     }
-    if (build.status === 'cancelled') {
-      return res.status(400).json({ error: 'Build is already cancelled' });
-    }
-
     const { data: request, error: reqErr } = await supabase
       .from('requests')
       .select('id, author_id')
@@ -293,6 +294,18 @@ router.post('/:buildId/cancel', requireAuth, async (req, res, next) => {
     }
     if (request.author_id !== userId) {
       return res.status(403).json({ error: 'You do not own this request' });
+    }
+
+    // State machine guard
+    const { data: transitionOk } = await supabase
+      .rpc('validate_build_transition', { p_from: build.status, p_to: 'cancelled' });
+    if (!transitionOk) {
+      return res.status(400).json({
+        error: `Cannot cancel build in status '${build.status}'.`,
+      });
+    }
+    if (build.escrow_status === 'disputed_hold') {
+      return res.status(400).json({ error: 'Escrow is frozen pending dispute resolution' });
     }
 
     const { data: updated, error: updateErr } = await supabase
@@ -317,6 +330,86 @@ router.post('/:buildId/cancel', requireAuth, async (req, res, next) => {
   } catch (e) {
     next(e);
   }
+});
+
+/**
+ * POST /api/hire/:buildId/dispute
+ * Auth required. Requester raises a formal dispute on a delivered build.
+ * Freezes escrow (disputed_hold) and sets build to 'disputed'.
+ */
+router.post('/:buildId/dispute', requireAuth, async (req, res, next) => {
+  try {
+    const { buildId } = req.params;
+    const { reason } = req.body || {};
+    if (!reason) return res.status(400).json({ error: 'Dispute reason is required' });
+
+    const { data: build, error: buildErr } = await supabase
+      .from('builds')
+      .select('id, request_id, status, escrow_status')
+      .eq('id', buildId).single();
+    if (buildErr || !build) return res.status(404).json({ error: 'Build not found' });
+
+    const { data: request } = await supabase
+      .from('requests').select('author_id').eq('id', build.request_id).single();
+    if (!request || request.author_id !== req.user.sub) {
+      return res.status(403).json({ error: 'You do not own this request' });
+    }
+
+    const { data: ok } = await supabase
+      .rpc('validate_build_transition', { p_from: build.status, p_to: 'disputed' });
+    if (!ok) {
+      return res.status(400).json({ error: `Cannot raise dispute on build in status '${build.status}'` });
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('builds')
+      .update({
+        status: 'disputed',
+        escrow_status: 'disputed_hold',
+        dispute_reason: reason,
+        dispute_opened_at: new Date().toISOString(),
+      })
+      .eq('id', buildId).select().single();
+    if (updateErr) throw updateErr;
+
+    res.json(mapBuild(updated));
+  } catch (e) { next(e); }
+});
+
+/**
+ * POST /api/hire/:buildId/request-revision
+ * Auth required. Requester asks for changes on a delivered build.
+ */
+router.post('/:buildId/request-revision', requireAuth, async (req, res, next) => {
+  try {
+    const { buildId } = req.params;
+
+    const { data: build, error: buildErr } = await supabase
+      .from('builds')
+      .select('id, request_id, status')
+      .eq('id', buildId).single();
+    if (buildErr || !build) return res.status(404).json({ error: 'Build not found' });
+
+    const { data: request } = await supabase
+      .from('requests').select('author_id').eq('id', build.request_id).single();
+    if (!request || request.author_id !== req.user.sub) {
+      return res.status(403).json({ error: 'You do not own this request' });
+    }
+
+    const { data: ok } = await supabase
+      .rpc('validate_build_transition', { p_from: build.status, p_to: 'revision_requested' });
+    if (!ok) {
+      return res.status(400).json({ error: `Cannot request revision on build in status '${build.status}'` });
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('builds')
+      .update({ status: 'revision_requested' })
+      .eq('id', buildId).select().single();
+    if (updateErr) throw updateErr;
+
+    res.json(mapBuild(updated));
+  } catch (e) { next(e); }
 });
 
 export const hireRouter = router;

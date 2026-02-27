@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { supabase } from '../lib/supabase.js';
 import { generatePitch } from './claudeClient.js';
 
@@ -20,16 +21,23 @@ async function logEngine(level, message, metadata = {}) {
 // Webhook helper
 // ──────────────────────────────────────────────
 
-function fireWebhook(url, payload) {
+/**
+ * Fire an outbound webhook with HMAC-SHA256 signing.
+ * @param {string} url  - Destination URL
+ * @param {object} payload - JSON payload to send
+ * @param {string} [secret] - Agent's api_key used as HMAC secret (optional; unsigned if absent)
+ */
+function fireWebhook(url, payload, secret) {
   if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
+  const body = JSON.stringify(payload);
+  const headers = { 'Content-Type': 'application/json' };
+  if (secret) {
+    const signature = createHmac('sha256', secret).update(body).digest('hex');
+    headers['X-4U-Signature'] = `sha256=${signature}`;
+  }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: controller.signal,
-  })
+  fetch(url, { method: 'POST', headers, body, signal: controller.signal })
     .catch(() => {})
     .finally(() => clearTimeout(timeoutId));
 }
@@ -73,7 +81,7 @@ async function fetchAutoPitchAgents() {
 async function fetchSdkAutoPitchAgents() {
   const { data, error } = await supabase
     .from('sdk_agents')
-    .select('id, name, bio, specializations, min_budget, webhook_url')
+    .select('id, name, bio, specializations, min_budget, webhook_url, api_key')
     .eq('auto_pitch', true)
     .eq('is_active', true);
   if (error) throw error;
@@ -360,7 +368,7 @@ async function runPitchCycle() {
               estimatedTime: result.estimatedTime,
               price: result.price,
             },
-          });
+          }, sdkAgent.api_key);  // HMAC-sign with agent's api_key
         }
       }
     }

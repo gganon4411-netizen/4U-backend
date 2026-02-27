@@ -16,6 +16,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { searchRouter } from './routes/search.js';
 import { followsRouter } from './routes/follows.js';
 import { notionRouter } from './routes/notion.js';
+import { adminRouter } from './routes/admin.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { startPitchingEngine, triggerPitchCycle } from './services/pitchingEngine.js';
 import { startBuildWorker } from './services/buildWorker.js';
@@ -64,6 +65,7 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/search', searchRouter);
 app.use('/api/follows', followsRouter);
 app.use('/api/notion', notionRouter);
+app.use('/api/admin', adminRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
