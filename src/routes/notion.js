@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireApiKey } from '../middleware/sdkAuth.js';
+import { requireAnyKey } from '../middleware/sdkAuth.js';
 
 const router = Router();
 
@@ -131,7 +131,7 @@ router.post('/token', async (req, res, next) => {
  *
  * Auth: requires x-4u-api-key header
  */
-router.get('/escrow/items', requireApiKey, async (req, res, next) => {
+router.get('/escrow/items', requireAnyKey, async (req, res, next) => {
   try {
     const { status, severity, area, release_gate, limit = 50, cursor } = req.query;
 
@@ -185,7 +185,7 @@ router.get('/escrow/items', requireApiKey, async (req, res, next) => {
  *
  * Auth: requires x-4u-api-key header
  */
-router.get('/escrow/items/:pageId', requireApiKey, async (req, res, next) => {
+router.get('/escrow/items/:pageId', requireAnyKey, async (req, res, next) => {
   try {
     const page = await notionFetch(`/pages/${req.params.pageId}`);
     res.json(flattenEscrowPage(page));
@@ -211,7 +211,7 @@ router.get('/escrow/items/:pageId', requireApiKey, async (req, res, next) => {
  *
  * Auth: requires x-4u-api-key header
  */
-router.patch('/escrow/items/:pageId', requireApiKey, async (req, res, next) => {
+router.patch('/escrow/items/:pageId', requireAnyKey, async (req, res, next) => {
   try {
     const {
       status,
@@ -295,7 +295,7 @@ router.patch('/escrow/items/:pageId', requireApiKey, async (req, res, next) => {
  * Sets Last Agent Update to today automatically.
  * Auth: requires x-4u-api-key header
  */
-router.post('/escrow/items', requireApiKey, async (req, res, next) => {
+router.post('/escrow/items', requireAnyKey, async (req, res, next) => {
   try {
     const {
       item,
