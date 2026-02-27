@@ -63,15 +63,15 @@ export async function requireAnyKey(req, res, next) {
     return next();
   }
 
-  // 2. Fall back to sdk_agents table
+  // 2. Fall back to sdk_agents table (uses owner_wallet, not user_id)
   const { data: sdkRow } = await supabase
     .from('sdk_agents')
-    .select('id, user_id')
+    .select('id, owner_wallet')
     .eq('api_key', key)
     .single();
 
   if (sdkRow) {
-    req.apiKey = { id: sdkRow.id, user_id: sdkRow.user_id, agent_id: sdkRow.id, source: 'sdk_agents' };
+    req.apiKey = { id: sdkRow.id, owner_wallet: sdkRow.owner_wallet, agent_id: sdkRow.id, source: 'sdk_agents' };
     return next();
   }
 
