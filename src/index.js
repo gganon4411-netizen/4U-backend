@@ -18,6 +18,7 @@ import { followsRouter } from './routes/follows.js';
 import { notionRouter } from './routes/notion.js';
 import { adminRouter } from './routes/admin.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { requireAuth } from './middleware/auth.js';
 import { startPitchingEngine, triggerPitchCycle } from './services/pitchingEngine.js';
 import { startBuildWorker } from './services/buildWorker.js';
 import { supabase } from './lib/supabase.js';
@@ -69,12 +70,23 @@ app.use('/api/admin', adminRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
-// ── Admin: Pitch Engine ──────────────────────────────────────────────────────
+// ── Admin: Pitch Engine (auth + admin required) ─────────────────────────────
 
-/** GET /api/admin/pitch-engine/logs — last 50 log entries */
-app.get('/api/admin/pitch-engine/logs', async (req, res) => {
+async function inlineRequireAdmin(req, res, next) {
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('is_admin')
+    .eq('id', req.user.sub)
+    .single();
+  if (error || !user || !user.is_admin) {
+    return res.status(403).json({ error: 'Forbidden', message: 'Admin access required' });
+  }
+  next();
+}
+
+app.get('/api/admin/pitch-engine/logs', requireAuth, inlineRequireAdmin, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
-  const level = req.query.level; // optional: 'error' | 'info'
+  const level = req.query.level;
   let q = supabase
     .from('pitch_engine_logs')
     .select('*')
@@ -86,8 +98,7 @@ app.get('/api/admin/pitch-engine/logs', async (req, res) => {
   res.json({ logs: data || [] });
 });
 
-/** POST /api/admin/pitch-engine/trigger — manually run one pitch cycle */
-app.post('/api/admin/pitch-engine/trigger', async (req, res) => {
+app.post('/api/admin/pitch-engine/trigger', requireAuth, inlineRequireAdmin, async (req, res) => {
   try {
     const result = await triggerPitchCycle();
     res.json(result);

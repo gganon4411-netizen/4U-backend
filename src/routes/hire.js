@@ -6,6 +6,7 @@ import {
   verifyUsdcDeposit,
   releaseToAgent,
   refundToBuyer,
+  getEscrowWalletAddress,
   PLATFORM_FEE_BPS,
 } from '../lib/solanaEscrow.js';
 
@@ -28,10 +29,28 @@ function mapBuild(row) {
     deposit_tx_signature: row.deposit_tx_signature || null,
     release_tx_signature: row.release_tx_signature || null,
     refund_tx_signature: row.refund_tx_signature || null,
+    revision_notes: row.revision_notes || null,
+    revision_count: row.revision_count ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
+
+/**
+ * GET /api/hire/escrow-info
+ * Returns escrow wallet address, USDC mint, and network so the frontend
+ * can build the deposit transaction without hardcoding addresses.
+ */
+router.get('/escrow-info', (req, res) => {
+  try {
+    const escrowWallet = getEscrowWalletAddress();
+    const usdcMint = process.env.USDC_MINT_ADDRESS || null;
+    const network = (process.env.SOLANA_RPC_URL || '').includes('devnet') ? 'devnet' : 'mainnet-beta';
+    res.json({ escrowWallet, usdcMint, network });
+  } catch (e) {
+    res.status(503).json({ error: e.message || 'Escrow not configured' });
+  }
+});
 
 /**
  * POST /api/hire
@@ -472,6 +491,114 @@ router.post('/:buildId/dispute', requireAuth, async (req, res, next) => {
       })
       .eq('id', buildId).select().single();
     if (updateErr) throw updateErr;
+
+    res.json(mapBuild(updated));
+  } catch (e) { next(e); }
+});
+
+/**
+ * POST /api/hire/:buildId/resolve-dispute
+ * Auth required (admin only). Resolves a disputed build by either refunding the buyer
+ * or releasing escrow to the agent.
+ * Body: { resolution: 'refund' | 'release' }
+ */
+router.post('/:buildId/resolve-dispute', requireAuth, async (req, res, next) => {
+  try {
+    const { buildId } = req.params;
+    const { resolution } = req.body || {};
+    if (!resolution || !['refund', 'release'].includes(resolution)) {
+      return res.status(400).json({ error: 'resolution must be "refund" or "release"' });
+    }
+
+    const { data: build, error: buildErr } = await supabase
+      .from('builds')
+      .select('id, request_id, agent_id, agent_name, status, escrow_amount, escrow_status')
+      .eq('id', buildId).single();
+    if (buildErr || !build) return res.status(404).json({ error: 'Build not found' });
+
+    if (build.status !== 'disputed' || build.escrow_status !== 'disputed_hold') {
+      return res.status(400).json({ error: 'Build is not in a disputed state' });
+    }
+
+    // Check: must be admin or request owner
+    const { data: request } = await supabase
+      .from('requests').select('author_id').eq('id', build.request_id).single();
+    const { data: adminUser } = await supabase
+      .from('users').select('is_admin').eq('id', req.user.sub).single();
+    const isOwner = request && request.author_id === req.user.sub;
+    const isAdmin = adminUser?.is_admin === true;
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Only the request owner or an admin can resolve disputes' });
+    }
+
+    const escrowAmount = Number(build.escrow_amount) || 0;
+
+    if (resolution === 'refund') {
+      const { data: requesterUser } = await supabase
+        .from('users').select('wallet_address').eq('id', request.author_id).single();
+
+      let refundTxSig = null;
+      if (escrowAmount > 0 && requesterUser?.wallet_address) {
+        const result = await refundToBuyer(requesterUser.wallet_address, escrowAmount);
+        refundTxSig = result.txSignature;
+      }
+
+      const { data: updated, error: updateErr } = await supabase
+        .from('builds')
+        .update({ status: 'cancelled', escrow_status: 'refunded', refund_tx_signature: refundTxSig })
+        .eq('id', buildId).select().single();
+      if (updateErr) throw updateErr;
+
+      await supabase.from('requests').update({
+        escrow_status: 'refunded', hired_agent_id: null, escrow_amount: null, status: 'Open',
+      }).eq('id', build.request_id);
+
+      return res.json(mapBuild(updated));
+    }
+
+    // resolution === 'release'
+    let agentWallet = null;
+    if (build.agent_id) {
+      const { data: agent } = await supabase
+        .from('agents').select('owner_wallet').eq('id', build.agent_id).single();
+      agentWallet = agent?.owner_wallet || null;
+    } else {
+      const { data: sdkPitch } = await supabase
+        .from('sdk_pitches').select('sdk_agent_id').eq('request_id', build.request_id).maybeSingle();
+      if (sdkPitch) {
+        const { data: sdkAgent } = await supabase
+          .from('sdk_agents').select('owner_wallet').eq('id', sdkPitch.sdk_agent_id).single();
+        agentWallet = sdkAgent?.owner_wallet || null;
+      }
+    }
+
+    let releaseTxSig = null;
+    let agentPayout = 0;
+    let platformFee = 0;
+
+    if (escrowAmount > 0 && agentWallet) {
+      const result = await releaseToAgent(agentWallet, escrowAmount);
+      releaseTxSig = result.txSignature;
+      agentPayout = result.agentPayout;
+      platformFee = result.platformFee;
+    } else {
+      agentPayout = Math.round(escrowAmount * (10000 - PLATFORM_FEE_BPS)) / 10000;
+      platformFee = escrowAmount - agentPayout;
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('builds')
+      .update({
+        status: 'accepted', escrow_status: 'released',
+        agent_payout: agentPayout, platform_fee: platformFee,
+        release_tx_signature: releaseTxSig,
+      })
+      .eq('id', buildId).select().single();
+    if (updateErr) throw updateErr;
+
+    await supabase.from('requests')
+      .update({ escrow_status: 'released', status: 'Completed' })
+      .eq('id', build.request_id);
 
     res.json(mapBuild(updated));
   } catch (e) { next(e); }
