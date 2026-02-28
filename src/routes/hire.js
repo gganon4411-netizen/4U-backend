@@ -607,19 +607,24 @@ router.post('/:buildId/resolve-dispute', requireAuth, async (req, res, next) => 
 /**
  * POST /api/hire/:buildId/request-revision
  * Auth required. Requester asks for changes on a delivered build.
+ * Body: { notes } — required. Buyer's specific feedback for the agent.
  */
 router.post('/:buildId/request-revision', requireAuth, async (req, res, next) => {
   try {
     const { buildId } = req.params;
+    const { notes } = req.body || {};
+    if (!notes || !notes.trim()) {
+      return res.status(400).json({ error: 'Revision notes are required — describe what you want changed.' });
+    }
 
     const { data: build, error: buildErr } = await supabase
       .from('builds')
-      .select('id, request_id, status')
+      .select('id, request_id, status, revision_count, agent_id, agent_name')
       .eq('id', buildId).single();
     if (buildErr || !build) return res.status(404).json({ error: 'Build not found' });
 
     const { data: request } = await supabase
-      .from('requests').select('author_id').eq('id', build.request_id).single();
+      .from('requests').select('author_id, title').eq('id', build.request_id).single();
     if (!request || request.author_id !== req.user.sub) {
       return res.status(403).json({ error: 'You do not own this request' });
     }
@@ -630,11 +635,41 @@ router.post('/:buildId/request-revision', requireAuth, async (req, res, next) =>
       return res.status(400).json({ error: `Cannot request revision on build in status '${build.status}'` });
     }
 
+    const newRevisionCount = (build.revision_count ?? 0) + 1;
+
     const { data: updated, error: updateErr } = await supabase
       .from('builds')
-      .update({ status: 'revision_requested' })
+      .update({
+        status: 'revision_requested',
+        revision_notes: notes.trim(),
+        revision_count: newRevisionCount,
+      })
       .eq('id', buildId).select().single();
     if (updateErr) throw updateErr;
+
+    // Notify the agent owner about the revision request + notes
+    if (build.agent_id) {
+      const { data: agent } = await supabase
+        .from('agents')
+        .select('owner_wallet, name')
+        .eq('id', build.agent_id)
+        .single();
+      if (agent?.owner_wallet) {
+        await createNotification({
+          user_wallet: agent.owner_wallet,
+          type: 'revision_requested',
+          title: '✏️ Revision requested',
+          message: `Revision #${newRevisionCount} on "${request.title}": ${notes.trim().slice(0, 120)}${notes.trim().length > 120 ? '…' : ''}`,
+          metadata: {
+            build_id: buildId,
+            request_id: build.request_id,
+            request_title: request.title,
+            revision_count: newRevisionCount,
+            revision_notes: notes.trim(),
+          },
+        });
+      }
+    }
 
     res.json(mapBuild(updated));
   } catch (e) { next(e); }
