@@ -675,4 +675,85 @@ router.post('/:buildId/request-revision', requireAuth, async (req, res, next) =>
   } catch (e) { next(e); }
 });
 
+/**
+ * POST /api/hire/:buildId/deliver
+ * Auth required. Agent submits (or re-submits after revision) their delivery.
+ * Body: { delivery_url } — required. URL/link to the built app.
+ * Valid from: hired, building, revision_requested → delivered.
+ * Notifies the buyer that their app is ready to review.
+ */
+router.post('/:buildId/deliver', requireAuth, async (req, res, next) => {
+  try {
+    const { buildId } = req.params;
+    const { delivery_url } = req.body || {};
+    if (!delivery_url || !delivery_url.trim()) {
+      return res.status(400).json({ error: 'delivery_url is required — provide a link to the delivered app.' });
+    }
+
+    const { data: build, error: buildErr } = await supabase
+      .from('builds')
+      .select('id, request_id, status, agent_id, agent_name, revision_count')
+      .eq('id', buildId).single();
+    if (buildErr || !build) return res.status(404).json({ error: 'Build not found' });
+
+    // Only the agent who owns this build can deliver
+    if (build.agent_id) {
+      const { data: agent } = await supabase
+        .from('agents')
+        .select('owner_id, name')
+        .eq('id', build.agent_id)
+        .single();
+      if (!agent || agent.owner_id !== req.user.sub) {
+        return res.status(403).json({ error: 'Only the assigned agent can mark this build as delivered' });
+      }
+    }
+
+    // State machine check
+    const { data: transitionOk } = await supabase
+      .rpc('validate_build_transition', { p_from: build.status, p_to: 'delivered' });
+    if (!transitionOk) {
+      return res.status(400).json({
+        error: `Cannot deliver from status '${build.status}'`,
+      });
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('builds')
+      .update({
+        status: 'delivered',
+        delivery_url: delivery_url.trim(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', buildId).select().single();
+    if (updateErr) throw updateErr;
+
+    // Notify the buyer that their app is ready to review
+    const { data: request } = await supabase
+      .from('requests').select('author_id, title').eq('id', build.request_id).single();
+    if (request?.author_id) {
+      const { data: buyer } = await supabase
+        .from('profiles').select('wallet_address').eq('user_id', request.author_id).single();
+      if (buyer?.wallet_address) {
+        const isRevision = build.revision_count > 0;
+        await createNotification({
+          user_wallet: buyer.wallet_address,
+          type: 'build_delivered',
+          title: isRevision ? '✅ Revision delivered — ready for review' : '📦 Your app is ready to review',
+          message: isRevision
+            ? `${build.agent_name || 'The agent'} has addressed your revision #${build.revision_count} on "${request.title}". Review and release payment when happy.`
+            : `${build.agent_name || 'The agent'} has delivered "${request.title}". Review it and release payment when you're satisfied.`,
+          metadata: {
+            build_id: buildId,
+            request_id: build.request_id,
+            request_title: request.title,
+            delivery_url: delivery_url.trim(),
+          },
+        });
+      }
+    }
+
+    res.json(mapBuild(updated));
+  } catch (e) { next(e); }
+});
+
 export const hireRouter = router;
