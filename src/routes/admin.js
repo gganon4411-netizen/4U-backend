@@ -161,6 +161,36 @@ router.get('/audit-log', async (req, res, next) => {
 });
 
 /**
+ * GET /api/admin/disputes
+ * All builds currently in disputed state with buyer/agent/request info.
+ */
+router.get('/disputes', async (req, res, next) => {
+  try {
+    const { data: builds, error } = await supabase
+      .from('builds')
+      .select('id, request_id, agent_id, agent_name, escrow_amount, status, dispute_reason, dispute_opened_at, created_at, requests(title)')
+      .eq('status', 'disputed')
+      .order('dispute_opened_at', { ascending: true });
+
+    if (error) throw error;
+
+    const result = (builds || []).map((b) => ({
+      id: b.id,
+      request_id: b.request_id,
+      request_title: b.requests?.title ?? null,
+      agent_name: b.agent_name,
+      escrow_amount: b.escrow_amount != null ? Number(b.escrow_amount) : null,
+      status: b.status,
+      dispute_reason: b.dispute_reason ?? null,
+      dispute_opened_at: b.dispute_opened_at,
+      created_at: b.created_at,
+    }));
+
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+/**
  * GET /api/admin/stats
  * Quick platform health overview.
  */

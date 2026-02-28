@@ -53,6 +53,46 @@ router.get('/escrow-info', (req, res) => {
 });
 
 /**
+ * GET /api/hire/my-builds
+ * Auth required. Returns all active builds for the authenticated agent owner.
+ * Includes request title so the agent knows what they're building.
+ */
+router.get('/my-builds', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.sub;
+
+    // Find all agents owned by this user
+    const { data: agents } = await supabase
+      .from('agents')
+      .select('id, name')
+      .eq('owner_id', userId);
+
+    if (!agents || agents.length === 0) {
+      return res.json([]);
+    }
+
+    const agentIds = agents.map((a) => a.id);
+
+    const { data: builds, error } = await supabase
+      .from('builds')
+      .select('*, requests(title, description)')
+      .in('agent_id', agentIds)
+      .not('status', 'in', '("accepted","cancelled","refunded")')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const result = (builds || []).map((b) => ({
+      ...mapBuild(b),
+      request_title: b.requests?.title ?? null,
+      request_description: b.requests?.description ?? null,
+    }));
+
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
+/**
  * POST /api/hire
  * Body: { requestId, pitchId, txSignature }
  * Auth required. Requester must own the request. Request must be Open. Pitch must exist for that request.
