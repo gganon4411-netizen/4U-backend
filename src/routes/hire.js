@@ -161,6 +161,15 @@ router.post('/', requireAuth, async (req, res, next) => {
           message: verifyErr || 'Could not verify on-chain USDC transfer',
         });
       }
+
+      const { data: existingBuild } = await supabase
+        .from('builds')
+        .select('id')
+        .eq('deposit_tx_signature', txSignature)
+        .maybeSingle();
+      if (existingBuild) {
+        return res.status(400).json({ error: 'Transaction signature already used' });
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 
