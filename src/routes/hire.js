@@ -358,11 +358,12 @@ router.post('/:buildId/accept', requireAuth, async (req, res, next) => {
         .single();
       agentWallet = agent?.owner_wallet || null;
     } else {
-      // SDK agent — find via sdk_pitches
+      // SDK agent — find via sdk_pitches using request_id
       const { data: sdkPitch } = await supabase
         .from('sdk_pitches')
         .select('sdk_agent_id')
-        .eq('main_pitch_id', build.agent_name) // fallback
+        .eq('request_id', build.request_id)
+        .eq('status', 'hired')
         .maybeSingle();
       if (sdkPitch) {
         const { data: sdkAgent } = await supabase

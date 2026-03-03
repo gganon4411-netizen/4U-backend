@@ -51,7 +51,7 @@ router.get('/', async (req, res, next) => {
     const data = (rows || []).map((r) => ({
       id: r.id,
       title: r.title,
-      description: r.description,
+      description: r.description ? r.description.slice(0, 200) : '',
       categories: r.categories || [],
       budget: r.budget,
       timeline: r.timeline,
@@ -65,6 +65,7 @@ router.get('/', async (req, res, next) => {
       attachment: r.attachment,
     }));
 
+    res.set('Cache-Control', 'public, s-maxage=10, stale-while-revalidate=30');
     res.json({ requests: data, total: data.length });
   } catch (e) {
     next(e);

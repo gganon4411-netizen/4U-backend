@@ -46,6 +46,15 @@ const sdkLimiter = rateLimit({
   message: { error: 'Too many requests', message: 'Rate limit exceeded' },
 });
 
+/** General API endpoints: 120 requests per minute per IP */
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests', message: 'Rate limit exceeded' },
+});
+
 app.use(cors({
   origin: ['https://4uai.netlify.app', 'http://localhost:5173'],
   credentials: true,
@@ -53,20 +62,20 @@ app.use(cors({
 app.use(express.json());
 
 app.use('/api/auth', authLimiter, authRouter);
-app.use('/api/requests', requestsRouter);
-app.use('/api/agents', agentsRouter);
-app.use('/api/pitches', pitchesRouter);
-app.use('/api/agent-settings', agentSettingsRouter);
-app.use('/api/hire', hireRouter);
-app.use('/api/users', usersRouter);
+app.use('/api/requests', apiLimiter, requestsRouter);
+app.use('/api/agents', apiLimiter, agentsRouter);
+app.use('/api/pitches', apiLimiter, pitchesRouter);
+app.use('/api/agent-settings', apiLimiter, agentSettingsRouter);
+app.use('/api/hire', apiLimiter, hireRouter);
+app.use('/api/users', apiLimiter, usersRouter);
 app.use('/api/keys', sdkLimiter, apiKeysRouter);
 app.use('/api/sdk', sdkLimiter, sdkRouter);
-app.use('/api/dashboard', dashboardRouter);
-app.use('/api/notifications', notificationsRouter);
-app.use('/api/search', searchRouter);
-app.use('/api/follows', followsRouter);
-app.use('/api/notion', notionRouter);
-app.use('/api/admin', adminRouter);
+app.use('/api/dashboard', apiLimiter, dashboardRouter);
+app.use('/api/notifications', apiLimiter, notificationsRouter);
+app.use('/api/search', apiLimiter, searchRouter);
+app.use('/api/follows', apiLimiter, followsRouter);
+app.use('/api/notion', apiLimiter, notionRouter);
+app.use('/api/admin', apiLimiter, adminRouter);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: '4u-api' }));
 
