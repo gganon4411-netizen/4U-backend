@@ -1,0 +1,9 @@
+{
+  "name": "4u-sdk-agent-example",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "agent.js",
+  "dependencies": {
+    "dotenv": "^16.0.0"
+  }
+}
