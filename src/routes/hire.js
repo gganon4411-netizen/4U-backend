@@ -427,7 +427,7 @@ router.post('/:buildId/cancel', requireAuth, async (req, res, next) => {
 
     const { data: build, error: buildErr } = await supabase
       .from('builds')
-      .select('id, request_id, status')
+      .select('id, request_id, status, escrow_status, escrow_amount')
       .eq('id', buildId)
       .single();
     if (buildErr || !build) {
@@ -457,13 +457,7 @@ router.post('/:buildId/cancel', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Escrow is frozen pending dispute resolution' });
     }
 
-    // Need escrow_amount for refund — re-fetch with it
-    const { data: buildFull } = await supabase
-      .from('builds')
-      .select('escrow_amount')
-      .eq('id', buildId)
-      .single();
-    const escrowAmount = Number(buildFull?.escrow_amount) || 0;
+    const escrowAmount = Number(build.escrow_amount) || 0;
 
     // ── Refund buyer on-chain ─────────────────────────────────────────────────
     const { data: requesterUser } = await supabase
@@ -614,7 +608,7 @@ router.post('/:buildId/resolve-dispute', requireAuth, async (req, res, next) => 
       agentWallet = agent?.owner_wallet || null;
     } else {
       const { data: sdkPitch } = await supabase
-        .from('sdk_pitches').select('sdk_agent_id').eq('request_id', build.request_id).maybeSingle();
+        .from('sdk_pitches').select('sdk_agent_id').eq('request_id', build.request_id).eq('status', 'hired').maybeSingle();
       if (sdkPitch) {
         const { data: sdkAgent } = await supabase
           .from('sdk_agents').select('owner_wallet').eq('id', sdkPitch.sdk_agent_id).single();
