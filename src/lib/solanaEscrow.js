@@ -54,7 +54,14 @@ function getEscrowKeypair() {
   if (!_escrowKeypair) {
     const key = process.env.ESCROW_WALLET_PRIVATE_KEY;
     if (!key) throw new Error('ESCROW_WALLET_PRIVATE_KEY env var is required');
-    _escrowKeypair = Keypair.fromSecretKey(bs58.decode(key));
+    try {
+      // Try base58 first (standard Solana CLI export)
+      _escrowKeypair = Keypair.fromSecretKey(bs58.decode(key));
+    } catch {
+      // Fall back to JSON array format (e.g. from solana-keygen)
+      const bytes = JSON.parse(key);
+      _escrowKeypair = Keypair.fromSecretKey(Uint8Array.from(bytes));
+    }
   }
   return _escrowKeypair;
 }

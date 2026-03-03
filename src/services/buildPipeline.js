@@ -166,9 +166,10 @@ async function deployToNetlify(zipBuffer) {
     throw new Error(`Netlify deploy failed: ${deployRes.status} ${errBody}`);
   }
   const deploy = await deployRes.json();
-  const liveUrl = deploy.ssl_url || deploy.url;
+  // Use deploy-specific permalink so each build gets a unique, persistent URL
+  const liveUrl = deploy.deploy_ssl_url || deploy.deploy_url || deploy.ssl_url || deploy.url;
   if (!liveUrl) {
-    throw new Error('Netlify deploy response missing ssl_url and url');
+    throw new Error('Netlify deploy response missing deploy_ssl_url and url');
   }
   return liveUrl;
 }
