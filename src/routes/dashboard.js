@@ -5,6 +5,149 @@ import { requireAuth } from '../middleware/auth.js';
 const router = Router();
 
 /**
+ * GET /api/dashboard/requests
+ * requireAuth. Returns current user's requests (My Requests).
+ */
+router.get('/requests', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.sub;
+    const { data: rows, error } = await supabase
+      .from('requests')
+      .select(`
+        id, title, description, categories, budget, timeline, status,
+        author_id, created_at
+      `)
+      .eq('author_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const requestIds = (rows || []).map((r) => r.id);
+    const { data: pitchCounts } = requestIds.length > 0
+      ? await supabase.from('pitches').select('request_id').in('request_id', requestIds)
+      : { data: [] };
+    const countByRequest = (pitchCounts || []).reduce((acc, p) => {
+      acc[p.request_id] = (acc[p.request_id] || 0) + 1;
+      return acc;
+    }, {});
+
+    const requests = (rows || []).map((r) => ({
+      id: r.id,
+      title: r.title,
+      description: r.description ? r.description.slice(0, 200) : '',
+      categories: r.categories || [],
+      budget: r.budget,
+      timeline: r.timeline,
+      status: r.status,
+      pitchCount: countByRequest[r.id] ?? 0,
+      createdAt: new Date(r.created_at).toISOString(),
+      currency: 'USDC',
+    }));
+
+    res.json({ requests });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * GET /api/dashboard/pitches
+ * requireAuth. Returns pitches submitted by current user (My Pitches).
+ */
+router.get('/pitches', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user.sub;
+    const { data: user, error: userErr } = await supabase
+      .from('users')
+      .select('wallet_address')
+      .eq('id', userId)
+      .single();
+    if (userErr || !user?.wallet_address) {
+      return res.json({ pitches: [] });
+    }
+
+    const pitches = [];
+
+    // 1. Regular pitches where author_id = user
+    const { data: regRows } = await supabase
+      .from('pitches')
+      .select('id, request_id, price, created_at')
+      .eq('author_id', userId)
+      .order('created_at', { ascending: false });
+
+    const requestIds = [...new Set((regRows || []).map((p) => p.request_id))];
+    const { data: reqRows } = requestIds.length > 0
+      ? await supabase.from('requests').select('id, title').in('id', requestIds)
+      : { data: [] };
+    const titlesByRequest = Object.fromEntries((reqRows || []).map((r) => [r.id, r.title]));
+
+    const { data: builds } = requestIds.length > 0
+      ? await supabase.from('builds').select('request_id, agent_id').in('request_id', requestIds)
+      : { data: [] };
+    const hiredSet = new Set((builds || []).map((b) => `${b.request_id}:${b.agent_id}`));
+
+    for (const p of regRows || []) {
+      const { data: pitchRow } = await supabase
+        .from('pitches')
+        .select('agent_id')
+        .eq('id', p.id)
+        .single();
+      const isHired = pitchRow?.agent_id
+        ? hiredSet.has(`${p.request_id}:${pitchRow.agent_id}`)
+        : false;
+      pitches.push({
+        id: p.id,
+        requestId: p.request_id,
+        requestTitle: titlesByRequest[p.request_id] || '—',
+        price: Number(p.price) || 0,
+        currency: 'USDC',
+        status: isHired ? 'Hired' : 'Pending',
+        createdAt: new Date(p.created_at).toISOString(),
+      });
+    }
+
+    // 2. SDK pitches (owner_wallet = user wallet)
+    const { data: sdkAgents } = await supabase
+      .from('sdk_agents')
+      .select('id')
+      .eq('owner_wallet', user.wallet_address);
+    const sdkAgentIds = (sdkAgents || []).map((a) => a.id);
+
+    if (sdkAgentIds.length > 0) {
+      const { data: sdkRows } = await supabase
+        .from('sdk_pitches')
+        .select('id, request_id, price, status, created_at')
+        .in('sdk_agent_id', sdkAgentIds)
+        .order('created_at', { ascending: false });
+
+      const sdkRequestIds = [...new Set((sdkRows || []).map((p) => p.request_id))];
+      const { data: sdkReqRows } = sdkRequestIds.length > 0
+        ? await supabase.from('requests').select('id, title').in('id', sdkRequestIds)
+        : { data: [] };
+      const sdkTitles = Object.fromEntries((sdkReqRows || []).map((r) => [r.id, r.title]));
+
+      const statusMap = { submitted: 'Pending', hired: 'Hired', delivered: 'Hired', rejected: 'Rejected' };
+      for (const p of sdkRows || []) {
+        pitches.push({
+          id: `sdk-${p.id}`,
+          requestId: p.request_id,
+          requestTitle: sdkTitles[p.request_id] || '—',
+          price: Number(p.price) || 0,
+          currency: 'USDC',
+          status: statusMap[p.status] || 'Pending',
+          createdAt: new Date(p.created_at).toISOString(),
+        });
+      }
+    }
+
+    pitches.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json({ pitches });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * GET /api/dashboard/stats
  * requireAuth. Returns current user's personal stats.
  */
