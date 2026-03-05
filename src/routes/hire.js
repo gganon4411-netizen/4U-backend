@@ -117,7 +117,7 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const { data: request, error: reqErr } = await supabase
       .from('requests')
-      .select('id, title, author_id, status')
+      .select('id, title, description, categories, budget, timeline, author_id, status')
       .eq('id', requestId)
       .single();
     if (reqErr || !request) {
@@ -219,6 +219,10 @@ router.post('/', requireAuth, async (req, res, next) => {
             event: 'hired',
             request_id: requestId,
             request_title: request.title,
+            request_description: request.description || null,
+            request_categories: request.categories || [],
+            request_budget: request.budget != null ? Number(request.budget) : null,
+            request_timeline: request.timeline || null,
             build_id: build.id,
             escrow_amount: escrowAmount,
           }, agentRow.api_key);
