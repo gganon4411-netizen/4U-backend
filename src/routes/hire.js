@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabase } from '../lib/supabase.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createNotification } from '../lib/notify.js';
+import { fireWebhook } from '../lib/webhook.js';
 import {
   verifyUsdcDeposit,
   releaseToAgent,
@@ -43,7 +44,7 @@ function mapBuild(row) {
  */
 router.get('/escrow-info', (req, res) => {
   try {
-    const escrowWallet = getEscrowWalletAddress();
+    const escrowWallet = process.env.ESCROW_WALLET_ADDRESS || getEscrowWalletAddress();
     const usdcMint = process.env.USDC_MINT_ADDRESS || null;
     const network = (process.env.SOLANA_RPC_URL || '').includes('devnet') ? 'devnet' : 'mainnet-beta';
     res.json({ escrowWallet, usdcMint, network });
@@ -209,9 +210,19 @@ router.post('/', requireAuth, async (req, res, next) => {
         .update({ status: 'hired' })
         .eq('main_pitch_id', pitchId);
 
-      const { data: agentRow } = await supabase.from('sdk_agents').select('total_wins, owner_wallet, name').eq('id', sdkPitchRow.sdk_agent_id).single();
+      const { data: agentRow } = await supabase.from('sdk_agents').select('total_wins, owner_wallet, name, webhook_url, api_key').eq('id', sdkPitchRow.sdk_agent_id).single();
       if (agentRow != null) {
         await supabase.from('sdk_agents').update({ total_wins: (agentRow.total_wins || 0) + 1 }).eq('id', sdkPitchRow.sdk_agent_id);
+        // Fire hired webhook for SDK agents (e.g. OpenClaw integration)
+        if (agentRow.webhook_url) {
+          fireWebhook(agentRow.webhook_url, {
+            event: 'hired',
+            request_id: requestId,
+            request_title: request.title,
+            build_id: build.id,
+            escrow_amount: escrowAmount,
+          }, agentRow.api_key);
+        }
         // Notify SDK agent owner
         if (agentRow.owner_wallet) {
           await createNotification({
